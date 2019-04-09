@@ -185,7 +185,7 @@ def learn(env,
     def make_obs_ph(name):
         return U.BatchInput((16, 16), name=name)  # dont know if this will work
 
-
+    
     act_x, train_x, update_target_x, debug_x = deepq.build_graph.build_train(  # if these dont work, try w/o build_graph
         make_obs_ph = make_obs_ph,
         q_func=q_func,
@@ -231,12 +231,10 @@ def learn(env,
         beta_schedule_x = None
         beta_schedule_y = None
 
-    
     # Create the schedule for exploration starting from 1.
     exploration = LinearSchedule(schedule_timesteps=int(max_timesteps * exploration_fraction), 
                                           initial_p=1.0,
                                           final_p=exploration_final_eps)
-                                          
     # Initialize the parameters and copy them to the target network.
     U.initialize()
     update_target_x()
@@ -244,18 +242,17 @@ def learn(env,
     
     episode_rewards = [0.0]
     saved_mean_reward = None
-    
     obs = env.reset()
     
     # Now onto the actual SC2 interaction -- everything below this is guesswork thusfar. forget how this works
     obs = env.step(actions.FUNCTIONS.select_army.id)  # or return this??
-    
     screen = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.NEUTRAL).astype(int)
     player_y, player_x = (obs.observation.feature_minimap.player_relative ==
                                   features.PlayerRelative.SELF).nonzero()
     player = [int(player_x.mean()), int(player_y.mean())]
     
     reset= True
+    
     with tempfile.TemporaryDirectory() as td:
         model_saved = False
         model_file = os.path.join('model/', 'mineral_shards')
@@ -329,6 +326,65 @@ def learn(env,
             episode_rewards.append(0.0)
             reset = True
             
-        if t > learning_start and t % train_freq == 0:
+        if t > learning_start and t % train_freq == 0:  # if step count is past learning_start and its time to update
+            # minimize the error of Bellman equation on a batch sampled from replay buffer
+            if prioritized_replay:
+                experience_x = replay_buffer_x.sample(batch_size, beta=beta_schedule_x.value(t))
+                (obs_t_x, actions_x, rewards_x, obs_tp1_x, dones_x, weights_x, batch_idxes_x) = experience_x
+                
+                experience_y = replay_buffer_y.sample(batch_size, beta=beta_schedule_y.value(t))
+                (obs_t_y, actions_y, rewards_y, obs_tp1_y, dones_y, weights_y, batch_idxes_y) = experience_y
+                
+            else:
+                obs_t_x, actions_x, rewards_x, obs_tp1_x, dones_x = replay_buffer_x.sample(batch_size)
+                weights_x, batch_idxes_x = np.ones_like(rewards_x), None
+                
+                obs_t_y, actions_y, rewards_y, obs_tp1_y, dones_y = replay_buffer_y.sample(batch_size)
+                weights_y, batch_idxes_y = np.ones_like(rewards_y), None
+                
+            td_errors_x = train_x(obs_t_x, actions_x, rewards_x, obs_tp1_x, dones_x, weights_x)  # temporal difference ?
+            td_errors_y = train_y(obs_t_y, actions_y, rewards_y, obs_tp1_y, dones_y, weights_y)  # diff between Q and BE
+            
+            if prioritized_replay:
+                new_priorities_x = np.abs(td_errors_x) + prioritized_replay_eps
+                new_priorities_y = np.abs(td_errors_x) + prioritizied_replay_eps
+                replay_buffer_x.update_priorities(batch_idxes_x, new_priorities_x)  # update priorities of sampled trans
+                replay_buffer_y.update_priorities(batch_idxes_y, new_priorities_y)  # new_pr --> transition pr at pr[idx]
+                
+                
+        if t > learning_stats and t % target_network_update_freq == 0:  # if its time to update network
+            update_target_x()
+            update_target_y()
+            
+        mean_100ep_reward = round(np.mean(episode_rewards[-101:-1]), 1)
+        num_episodes = len(episode_rewards)
+        
+        # lot of logging below
+        if done and print_freq is not None and len(episode_rewards) % print_freq == 0:
+            logger.record_tabular("steps", t)
+            logger.record_tabular("episodes", num_episodes)
+            logger.record_tabular("reward", reward)
+            logger.reord_tabular("mean 100 episode reward", mean_100ep_reward)
+            logger.record_tabular(f"{int(100*exploration.value(t))} time spent exploring")
+            logger.dump_tabular
+        
+        if (checkpoint_freq is not None and t > learning_starts and 
+                num_episodes > 100 and t % checkpoint_freq == 0):
+            if saved_mean_reward is None or mean_100ep_reward > saved_mean_reward:
+              if print_freq is not None:
+                logger.log("Saving model due to mean reward increase: {} -> {}".format(
+                  saved_mean_reward, mean_100ep_reward))
+              U.save_state(model_file)
+              model_saved = True
+              saved_mean_reward = mean_100ep_reward
+        if model_saved:
+          if print_freq is not None:
+            logger.log("Restored model with mean reward: {}".format(saved_mean_reward))
+          U.load_state(model_file)
+                
+        
+    return ActWrapper(act_x), ActWrapper(act_y)
+
+# TODO: coordinates, other pysc2 helper functions
             
             
