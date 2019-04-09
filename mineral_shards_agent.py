@@ -13,6 +13,8 @@ from baselines import logger
 from baselines.common.schedules import LinearSchedule
 from baselines import deepq
 from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
+from baselines.deepq.models import build_q_func
+from baselines.deepq.utils import ObservationInput
 
 from pysc2.lib import actions as sc2_actions
 from pysc2.env import environment
@@ -20,8 +22,52 @@ from pysc2.lib import features
 from pysc2.lib import actions
 
 
-# class ActWrapper(object):
-# """ Takes batches of observations and returns actions """
+class ActWrapper(object):
+    """ Takes batches of observations and returns actions """
+    def __init__(self, act):
+        self._act = act
+
+
+    @staticmethod
+    def load(path, act_params, num_cpu=4):
+        """ """
+        with open(path, 'rb') as f:
+            model_data = dill.load(f)
+        act = deepq.build_graph.build_act(**act_params)
+        sess = U.make_session(num_cpu)
+        sess.__enter__()
+        with tempfile.TemporaryDirectory() as td:
+            arc_path = os.path.join(td, 'packed.zip')
+            with open(arc_path, 'wb') as f:
+                f.write(model_data)
+
+            zipfile.ZipFile(arc_path, 'r', zipfile.ZIP_DEFLATED).extractall(td)
+            U.load_state(os.path.join(td, 'model'))
+
+        return ActWrapper(act)
+
+
+    def __call__(self, *args, **kwargs):
+        return self._act(*args, **kwargs)
+
+
+    def save(self, path):
+        """ pickle model to path """
+        with tempfile.TemporaryDirectory() as td:
+            U.save_state(os.path.join(td, 'model'))
+            arc_name = os.path.join(td, 'packed.zip')
+            with zipfile.ZipFile(arc_name, 'w') as zipf:
+                for root, dirs, files in os.walk(td):
+                    for fname in files:
+                        file_path = os.path.join(root, fname)
+                        if file_path != arc_name:
+                            zipf.write(file_path, os.path.relpath(file_path, td))
+
+            with open(arc_name, 'rb') as f:
+                model_data = f.read()
+            with open(path, 'wb') as f:
+                dill.dump((model_data), f)
+
 
 
 def load(path, act_params, num_cpu=4):
@@ -39,8 +85,9 @@ def load(path, act_params, num_cpu=4):
       and returns actions.
   """
   return ActWrapper.load(path, act_params=act_params, num_cpu=num_cpu)
-  
-  
+
+
+
 def learn(env,
           q_func,
           num_actions=4,
@@ -131,20 +178,40 @@ def learn(env,
         Wrapper over act function. Adds ability to save it and load it.
         See header of baselines/deepq/categorical.py for details on the act function.
     """
+    sess = U.make_session(num_cpu)
+    sess.__enter__()
+
+
+    def make_obs_ph(name):
+        return U.BatchInput((16, 16), name=name)
+
+
+    act_x, train_x, update_target_x, debug_x = deepq.build_train(
+        make_obs_ph = make_obs_ph,
+        q_func=q_func,
+        num_actions=num_actions,
+        optimizer=tf.train.AdamOptimizer(lr),
+        gamma=gamma,
+        grad_norm_clipping=10,
+        score='deepq_x')
+
+    act_y, train_y, update_target_y, debug_y = deepq.build_train(
+        make_obs_ph = make_obs_ph,
+        q_func=q_func,
+        num_actions=num_actions,
+        optimizer=tf.train.AdamOptimizer(lr),
+        gamma=gamma,
+        grad_norm_clipping=10,
+        score='deepq_y')
+
+    act_params = {
+    'make_obs__ph': make_obs_ph,
+    'q_func': q_func,
+    'num_actions': num_actions
+    }
+
+
+    # create replay buffer
     
-    
-    
-    
-    
-          
-          
-          
-          
-          
-          
-          
-  
-  
-  
-  
+
   
