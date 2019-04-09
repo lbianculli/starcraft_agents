@@ -23,7 +23,7 @@ from pysc2.lib import actions
 
 
 class ActWrapper(object):
-    """ Takes batches of observations and returns actions """
+    """ Takes batches of observations and returns actions (copied almost exactly from openai/baselines) """
     def __init__(self, act):
         self._act = act
 
@@ -183,10 +183,10 @@ def learn(env,
 
 
     def make_obs_ph(name):
-        return U.BatchInput((16, 16), name=name)
+        return U.BatchInput((16, 16), name=name)  # dont know if this will work
 
 
-    act_x, train_x, update_target_x, debug_x = deepq.build_train(
+    act_x, train_x, update_target_x, debug_x = deepq.build_graph.build_train(  # if these dont work, try w/o build_graph
         make_obs_ph = make_obs_ph,
         q_func=q_func,
         num_actions=num_actions,
@@ -195,7 +195,7 @@ def learn(env,
         grad_norm_clipping=10,
         score='deepq_x')
 
-    act_y, train_y, update_target_y, debug_y = deepq.build_train(
+    act_y, train_y, update_target_y, debug_y = deepq.build_graph.build_train(
         make_obs_ph = make_obs_ph,
         q_func=q_func,
         num_actions=num_actions,
@@ -211,7 +211,7 @@ def learn(env,
     }
 
 
-    # create replay buffer
+    # create replay buffer (again copied from openai/baselines)
     
 
   
