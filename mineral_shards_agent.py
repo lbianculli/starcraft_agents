@@ -70,7 +70,7 @@ class ActWrapper(object):
 
 
 
-def load(path, act_params, num_cpu=4):
+def load(path, act_params, num_cpu=4):  # much of this copied from openai/baselines
   """Load act function that was returned by learn function.
   Parameters
   ----------
@@ -209,9 +209,57 @@ def learn(env,
     'q_func': q_func,
     'num_actions': num_actions
     }
-
-
-    # create replay buffer (again copied from openai/baselines)
     
+    # create replay buffer
+    if prioritized_replay:
+        replay_buffer_x = PrioritizedReplayBuffer(buffer_size, alpha=prioritized_replay_alpha)
+        replay_buffer_y = PrioritizedReplayBuffer(buffer_size, alpha=prioritized_replay_alpha)
 
+        if prioritized_replay_beta_iters is None:
+          prioritized_replay_beta_iters = max_timesteps
+        beta_schedule_x = LinearSchedule(prioritized_replay_beta_iters,
+                                       initial_p=prioritized_replay_beta0,
+                                       final_p=1.0)
+
+        beta_schedule_y = LinearSchedule(prioritized_replay_beta_iters,
+                                         initial_p=prioritized_replay_beta0,
+                                         final_p=1.0)
+    else:
+        replay_buffer_x = ReplayBuffer(buffer_size)
+        replay_buffer_y = ReplayBuffer(buffer_size)
+
+        beta_schedule_x = None
+        beta_schedule_y = None
+
+    
+    # Create the schedule for exploration starting from 1.
+    exploration_schedule = LinearSchedule(schedule_timesteps=int(max_timesteps * exploration_fraction), 
+                                          initial_p=1.0,
+                                          final_p=exploration_final_eps)
+                                          
+    # Initialize the parameters and copy them to the target network.
+    U.initialize()
+    update_target_x()
+    update_target_y()
+    
+    episode_rewards = [0.0]
+    saved_mean_reward = None
+    
+    obs = env.reset()
+    
+    # Now onto the actual SC2 interaction -- everything below this is guesswork thusfar. forget how this works
+    obs = env.step(actions.FUNCTIONS.select_army.id)
+    
+    screen = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.NEUTRAL).astype(int)
+    player_y, player_x = (obs.observation.feature_minimap.player_relative ==
+                                  features.PlayerRelative.SELF).nonzero()
+    player = [int(player_x.mean()), int(player_y.mean())]
+    
+    reset= True
+    with tempfile.TemporaryDirectory() as td:
+        model_saved = False
+        model_file = os.path.join('model/', 'mineral_shards')
+        print(model_file)
+        
+        for step in range(max_timesteps)
   
