@@ -23,32 +23,42 @@ import mineral_shards_agent
 
 def main(unusedargv):
   # started to figure out whats going on here but a lot to chew on
-  agent = TerranAgent()
-  map = 'Simple64'
+  map = 'CollectMineralShards'
   try:
       while True:  
-          with sc2_env.SC2Env(
-              map_name=map,
-              players=[sc2_env.Agent(sc2_env.Race.terran),
-                       sc2_env.Bot(sc2_env.Race.terran,
-                                   sc2_env.Difficulty.very_easy)],
-              agent_interface_format=features.AgentInterfaceFormat( 
-                  feature_dimensions=features.Dimensions(screen=84, minimap=64),
-                  use_feature_units=True), 
-              step_mul=25, 
-              game_steps_per_episode=0, 
-              visualize=True  # True gives you a full version of the visuals
-              ) as env:
+        with sc2_env.SC2Env(
+            map_name="CollectMineralShards",
+            step_mul=step_mul,
+            visualize=True,
+            screen_size_px=(16, 16),
+            minimap_size_px=(16, 16)) as env:
+            
+			model = deepq.models.cnn_to_mlp(  # make sure specs right
+				convs=[(16,8,4), (32, 4, 2)], hiddens=[256], dueling=True)
+			
+			act = mineral_shards_agent.learn(
+				env, 
+				q_func=model,
+				num_actions=16,  # where this from?
+				lr=FLAGS.lr,
+				max_timesteps=FLAGS.timesteps,
+			  	buffer_size=10000,
+				exploration_fraction=FLAGS.exploration_fraction,
+				exploration_final_eps=0.01,
+				train_freq=4,
+				learning_starts=10000,
+				target_network_update_freq=1000,
+				gamma=0.99,
+				prioritized_replay=True,
+				callback=deepq_callback)
+# 			act.save("mineral_shards.pkl")
+				
 
-              agent.setup(env.observation_spec(), env.action_spec())
-              timesteps = env.reset()
-              agent.reset()
-
-              while True:
-                  step_actions = [agent.step(timesteps[0])]
-                  if timesteps[0].last():  
-                      break
-                  timesteps = env.step(step_actions) 
+def deepq_callback(locals, globals): 
+				
+				
+				
+			
 
   
   
