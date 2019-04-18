@@ -235,6 +235,7 @@ def learn(env,
     exploration = LinearSchedule(schedule_timesteps=int(max_timesteps * exploration_fraction), 
                                           initial_p=1.0,
                                           final_p=exploration_final_eps)
+    
     # Initialize the parameters and copy them to the target network.
     U.initialize()
     update_target_x()
@@ -245,13 +246,12 @@ def learn(env,
     obs = env.reset()
     
     # Now onto the actual SC2 interaction -- everything below this is guesswork thusfar. forget how this works
-    obs = env.step(actions.FUNCTIONS.select_army.id)  # or return this??
+    obs = env.step(actions.FUNCTIONS.select_army.id) 
     screen = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.NEUTRAL).astype(int)
     player_y, player_x = (obs.observation.feature_minimap.player_relative ==
                                   features.PlayerRelative.SELF).nonzero()
     player = [int(player_x.mean()), int(player_y.mean())]
-    
-    reset= True
+    reset = True
     
     with tempfile.TemporaryDirectory() as td:
         model_saved = False
@@ -264,7 +264,7 @@ def learn(env,
                     break
             # take action and update exploration to newest value
             kwargs = {}
-            if not param_noise:  # not sure what all this is exactly. think all variance reduction stuff
+            if not param_noise:  # think all variance reduction stuff
                 update_eps = exploration.value(t)
                 update_param_noise_threshold = 0.
             else:
@@ -281,20 +281,20 @@ def learn(env,
                 kwargs['update_param_noise_threshold'] = update_param_noise_threshold
                 kwargs['update_param_noice_scale'] = True
             
-            # remember, an act is a func to choose an action given an obs. dont get this at all.
-            # the [None] inserts a dim along axis=0
-            action_x = act_x(np.array(screen)[None], update_eps=update_eps, **kwargs)[0]
-            action_y = act_y(np.array(screen)[None], update_eps=update_eps, **kwargs)[0]
+            # remember, an act is a func to choose an action given an obs. 
+            # the [None] inserts a dimension along axis=0
+            action_x = act_x(np.array(screen)[None], update_eps=update_eps, **kwargs)[0]  # takes screen, adds dim, passes to act_
+            action_y = act_y(np.array(screen)[None], update_eps=update_eps, **kwargs)[0]  # returns an x and y coord respectively
             
             reset = False
             coord = [player[0], player[1]]
             r = 0
-            coord = [action_x, action_y]  # why both coords?
+            coord = [action_x, action_y]  # remember: action_x/y represent individual coords
             
             if actions.FUNCTIONS.Move_screen not in obs.observation.available_actions:
-                obs = env.step(actions=actions.FUNCTIONS.Select_army('now' ,'select_all'))  # this should be it, dont think i should return
-
-            new_action = [actions.FUNCTIONS.Move_screen('now', coord)]  # or return this?
+                obs = env.step(actions=actions.FUNCTIONS.Select_army('now' ,'select_all'))  
+                
+            new_action = [actions.FUNCTIONS.Move_screen('now', coord)]  
             obs = env.step(actions=new_action)
             
             new_screen = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.NEUTRAL).astype(int) 
@@ -303,9 +303,9 @@ def learn(env,
             player = [int(player_x.mean()), int(player_y.mean())]
             
             r = obs[0].reward
-            done = obs[0].step_type == environment.StepType.LAST  # not sure if this is it
+            done = obs[0].step_type == environment.StepType.LAST  # something like this
             
-            # Store transition in the replay buffer.
+            # Store transition in the replay buffer. Interesting that we need one for x and one for y 
             replay_buffer_x.add(screen, action_x, r, new_screen, float(done))
             replay_buffer_y.add(screen, action_y, r, new_screen, float(done))
 
