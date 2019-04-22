@@ -21,6 +21,11 @@ from pysc2.env import environment
 import mineral_shards_agent
 
 
+PROJ_DIR = '/home/lbianculli/pysc2/'
+max_mean_reward = 0
+last_filename = ''
+
+
 def main(unusedargv):
   # started to figure out whats going on here but a lot to chew on
   map = 'CollectMineralShards'
