@@ -33,8 +33,8 @@ def main(unusedargv):
             screen_size_px=(16, 16),
             minimap_size_px=(16, 16)) as env:
             
-			model = deepq.models.cnn_to_mlp(  # make sure specs right
-				convs=[(16,8,4), (32, 4, 2)], hiddens=[256], dueling=True)
+			model = deepq.models.cnn_to_mlp(  # outputs, kernel size, stride
+				convs=[(16, 5, 1), (32, 5, 1)], hiddens=[256], dueling=True)
 			
 			act = mineral_shards_agent.learn(
 				env, 
@@ -55,7 +55,23 @@ def main(unusedargv):
 				
 
 def deepq_callback(locals, globals): 
-				
+	global max_mean_reward, last_filename
+	
+	if 'done' in locals and locals['done'] == True:
+		if('mean_100ep_reward' in locals and locals ['num_episodes'] >= 10
+		   and locals['mean_100ep_reward'] > max_mean_reward):
+			
+			print('mean_100ep_reward: {locals['mean_100ep_reward']}\nmax_mean_reward: {max_mean_reward}')
+			
+		if not os.path.exists(os.path.join(PROJ_DIR, 'models/deepq/')):
+			try:
+				os.mkdir(os.path.join(PROJ_DIR, 'models/'))
+			except Exception as e:
+				try:
+					os.mkdir(os.path.join(PROJ_DIR, 'models/deepq/'))
+				except Exception as e:
+					print(str(e))
+		if last_filename != '':
 				
 				
 			
