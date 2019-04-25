@@ -59,24 +59,46 @@ def main(unusedargv):
 # 			act.save("mineral_shards.pkl")
 				
 
-def deepq_callback(locals, globals): 
+def deepq_callback(locals, globals):
+
 	global max_mean_reward, last_filename
-	
+
 	if 'done' in locals and locals['done'] == True:
-		if('mean_100ep_reward' in locals and locals ['num_episodes'] >= 10
-		   and locals['mean_100ep_reward'] > max_mean_reward):
-			
-			print('mean_100ep_reward: {locals['mean_100ep_reward']}\nmax_mean_reward: {max_mean_reward}')
-			
+	if('mean_100ep_reward' in locals and locals['num_episodes'] >= 10
+		and locals['mean_100ep_reward'] > max_mean_reward):
+
+      print("mean_100ep_reward : %s max_mean_reward : %s" %
+            (locals['mean_100ep_reward'], max_mean_reward))
+
 		if not os.path.exists(os.path.join(PROJ_DIR, 'models/deepq/')):
 			try:
-				os.mkdir(os.path.join(PROJ_DIR, 'models/'))
-			except Exception as e:
+		  		os.mkdir(os.path.join(PROJ_DIR, 'models/'))
+			except Exception as e:)
 				try:
-					os.mkdir(os.path.join(PROJ_DIR, 'models/deepq/'))
+		  			os.mkdir(os.path.join(PROJ_DIR, 'models/deepq/'))
 				except Exception as e:
-					print(str(e))
-		if last_filename != '':
+		  			print(str(e))
+
+		if last_filename != "":
+			os.remove(last_filename)
+			print("delete last model file : %s" % last_filename)
+
+		max_mean_reward = locals['mean_100ep_reward']
+		act_x = deepq_mineral_shards.ActWrapper(locals['act_x'])
+		act_y = deepq_mineral_shards.ActWrapper(locals['act_y'])
+
+		filename = os.path.join(
+		PROJ_DIR,
+		  'models/deepq/mineral_x_%s.pkl' % locals['mean_100ep_reward'])
+		act_x.save(filename)
+		filename = os.path.join(
+		  PROJ_DIR,
+		  'models/deepq/mineral_y_%s.pkl' % locals['mean_100ep_reward'])
+
+		act_y.save(filename)
+		print("save best mean_100ep_reward model to %s" % filename)
+		last_filename = filename
+
 				
 				
 			
