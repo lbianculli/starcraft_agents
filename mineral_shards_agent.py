@@ -385,6 +385,38 @@ def learn(env,
         
     return ActWrapper(act_x), ActWrapper(act_y)
 
-# TODO: coordinates, other pysc2 helper functions
-            
+# other pysc2 helper functions
+def is_selected(self, obs, unit_type):
+    ''' Returns True if unit type is selected, else False. '''
+    if (len(obs.observation.single_select) > 0 and  
+        obs.observation.single_select[0].unit_type == unit_type):
+        return True
+    if (len(obs.observation.multi_select) > 0 and
+        obs.observation.multi_select[0].unit_type == unit_type):
+        return True
+    else:
+        return False
+
+def get_units(self, obs, unit_type):
+    ''' Returns all units of given unit type (e.g: marine) '''
+    return [unit for unit in obs.observation.feature_units
+            if unit.unit_type == unit_type]
+
+def transform_location(self, obs, x, y, mm_x=64, mm_y=64):
+    ''' return new x,y coords based on dims of minimap, starting spawn '''
+    if not self.base_top_left:
+        return mm_x - x, mm_y - y
+    else:
+        return x, y
+
+def transform_distance(self, obs, x, x_dist, y, y_dist):
+    ''' taking x and y as input, returns new coords that are of input
+        distance from those points. Based on minimap dims'''
+    if not self.base_top_left:
+        x = x - x_dist
+        y = y - y_dist
+    else:
+        x = x + x_dist
+        y = y + y_dist
+
             
