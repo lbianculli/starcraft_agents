@@ -26,7 +26,7 @@ from baselines.deepq.models import build_q_func
 
 
 class TerranAgent(base_agent.BaseAgent):
-	def __init__(self):  # inherits setup, step, reset as below. main changes go to step
+	def __init__(self):  # inherits setup, step, reset as below. looks like everything that occurs should tie to step.
 		super(TerranAgent, self).__init__()
 	
 	def setup(self, obs_spec, action_spec):
