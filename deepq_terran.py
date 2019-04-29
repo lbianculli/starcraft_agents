@@ -21,7 +21,8 @@ from baselines.deepq.models import build_q_func
 
 # steps (for DQN): create env, create model, act = .learn (this is essentially the agent step), setup callback
 # actor critic requires the subproc for env.
-# the above steps are for [mineral shards] minigames -- what about regular game?
+# the above steps are for [mineral shards] minigames. What about regular game?
+# they use separate agent classes for minigames as well. if current mineral shards works, should be able to copy framework for actual. 
 
 
 class TerranAgent(base_agent.BaseAgent):
