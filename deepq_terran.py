@@ -47,17 +47,10 @@ class TerranAgent(base_agent.BaseAgent):
 
 
 
-def main():
-	with sc2_env.SC2Env(
-		map_name='Simple64', 
-		step_mul=8,
-		visualize=True,
-		screen_size_px=(64,64),
-		minimap_size_px=(64,64)) as env:
-						
-    
-  
-  
+
+
+
+
   
   
   
