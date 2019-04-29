@@ -26,7 +26,24 @@ from baselines.deepq.models import build_q_func
 
 
 class TerranAgent(base_agent.BaseAgent):
-	def __init__(self, ):
+	def __init__(self):  # inherits setup, step, reset as below. main changes go to step
+		super(TerranAgent, self).__init__()
+	
+	def setup(self, obs_spec, action_spec):
+		self.obs_spec = obs_spec
+		self.action_spec = action_spec
+
+	def reset(self):
+		self.episodes += 1
+
+	def step(self, obs):
+		self.steps += 1
+		self.reward += obs.reward
+		
+		
+		return actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
+
+
 
 
 
