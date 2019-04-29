@@ -25,44 +25,43 @@ last_filename = ''
 def main(unusedargv):
   # started to figure out whats going on here but a lot to chew on
   map = 'CollectMineralShards'
-  try:
-      while True:  
-        with sc2_env.SC2Env(
-            map_name="CollectMineralShards",
-            step_mul=step_mul,
-            visualize=True,
-            agent_interface_format=features.AgentInterfaceFormat(
+	# does this work?
+	with sc2_env.SC2Env(
+	    map_name="CollectMineralShards",
+	    step_mul=8,
+	    visualize=True,
+	    agent_interface_format=features.AgentInterfaceFormat(
 				feature_dimensions=features.Dimensions(screen=16, minimap=16)) as env:
-			
-			agent.setup(env.observation_spec(), env.action_spec())
-			timesteps = env.reset()
-			agent.reset()
 
-			while True:
-				step_actions = [agent.step(timesteps[0])]
-				if timesteps[0].last():  
-					break
-				timesteps = env.step(step_actions)  
-            
-# 			model = deepq.models.cnn_to_mlp(  # outputs, kernel size, stride
-# 				convs=[(16, 5, 1), (32, 5, 1)], hiddens=[256], dueling=True)
-			
-# 			act = mineral_shards_agent.learn(
-# 				env, 
-# 				q_func=model,
-# 				num_actions=16,  # where this from?
-# 				lr=FLAGS.lr,
-# 				max_timesteps=FLAGS.timesteps,
-# 			  	buffer_size=10000,
-# 				exploration_fraction=FLAGS.exploration_fraction,
-# 				exploration_final_eps=0.01,
-# 				train_freq=4,
-# 				learning_starts=10000,
-# 				target_network_update_freq=1000,
-# 				gamma=0.99,
-# 				prioritized_replay=True,
-# 				callback=deepq_callback)
-# # 			act.save("mineral_shards.pkl")
+	# 			agent.setup(env.observation_spec(), env.action_spec())
+	# 			timesteps = env.reset()
+	# 			agent.reset()
+
+	# 			while True:
+	# 				step_actions = [agent.step(timesteps[0])]
+	# 				if timesteps[0].last():  
+	# 					break
+	# 				timesteps = env.step(step_actions)  
+
+		model = deepq.models.cnn_to_mlp(  # outputs, kernel size, stride
+			convs=[(16, 5, 1), (32, 5, 1)], hiddens=[256], dueling=True)
+
+		act = mineral_shards_agent.learn(
+			env, 
+			q_func=model,
+			num_actions=16,  # where this from?
+			lr=FLAGS.lr,
+			max_timesteps=FLAGS.timesteps,
+			buffer_size=10000,
+			exploration_fraction=FLAGS.exploration_fraction,
+			exploration_final_eps=0.01,
+			train_freq=4,
+			learning_starts=10000,
+			target_network_update_freq=1000,
+			gamma=0.99,
+			prioritized_replay=True,
+			callback=deepq_callback)
+	# # 			act.save("mineral_shards.pkl")
 				
 
 def deepq_callback(locals, globals):
