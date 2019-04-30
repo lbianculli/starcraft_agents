@@ -19,7 +19,6 @@ from baselines.deepq.models import build_q_func
 from baselines.deepq.utils import ObservationInput
 
 
-
 class ActWrapper(object):
     """ Takes batches of observations and returns actions (copied almost exactly from openai/baselines) """
     def __init__(self, act):
