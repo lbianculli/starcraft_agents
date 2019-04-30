@@ -1,3 +1,5 @@
+### TRYING TO RECREATE BASED ON BASELINES CARTPOLE
+
 import numpy as np
 import os
 import dill
@@ -382,16 +384,27 @@ def learn(env,
 
     return ActWrapper(act_x), ActWrapper(act_y)
 
-# steps (for DQN): create env, create model, act = .learn (this is essentially the agent step), setup callback
-# actor critic requires the subproc for env.
-# the above steps are for [mineral shards] minigames. What about regular game?
-# they use separate agent classes for minigames as well. if current mineral shards works, should be able to copy framework for actual.
+#################
+##### AGENT #####
+#################
+
 
 
 class TerranAgent(base_agent.BaseAgent):
     def __init__(self):  # inherits setup, step, reset as below. looks like everything that occurs should tie to step.
-        super(TerranAgent, self).__init__()
-
+        super(TerranAgent, self).__init__(self, num_cpu, )  # not sure where to put U.make_session()
+        self.session = U.make_session(num_cpu, )
+        self.model = deepq.models.cnn_to_mlp(convs=[(16, 8, 4), (32, 4, 2)], hiddens=[256], dueling=True)
+        self.replay_buffer = ReplayBuffer(50000)
+        self.exploration = LinearSchedule(schedule_timesteps=10000, initial_p=1.0, final_p=0.02)
+        self.act, self.train, self.update_target, self.debug = deepq.build_train(
+            make_obs_ph=lambda name: ObservationInput(env.observation_space, name=name),
+            q_func=model, num_actions=env.action_space.n, optimizer=tf.train.AdamOptimizer(learning_rate=5e-4)) 
+        self.episode_rewards = [0.0]
+        self.prev_obs = None
+        self.action = None
+        self.reward = 0
+        
     def setup(self, obs_spec, action_spec):
         self.obs_spec = obs_spec
         self.action_spec = action_spec
@@ -400,11 +413,16 @@ class TerranAgent(base_agent.BaseAgent):
         self.episodes += 1
 
     def step(self, obs):
-        self.steps += 1
-        self.reward += obs.reward
+        # going to have to store going backwards. still should work sequentially (?) 
+        self.replay_buffer.add(self.prev_obs, self.action, self.reward, obs, float(done))
+        
+        self.action = self.act(obs[None], update_eps=self.exploration.value(t))[0]
+        self.reward = obs.reward
+        self.episode_rewards[-1] += obs.reward
+        self.prev_obs = obs  # need to put this somewhere so i can get obs and obs_tp1. need to be after storage (?)
+        
+        return self.action  # if this works that would be ideal. how does it choose action exactly?
 
-
-        return actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
 
 def main():
     agent = TerranAgent()
@@ -419,12 +437,17 @@ def main():
                 agent_interface_format=features.AgentInterfaceFormat(
                         feature_dimensions=features.Dimensions(screen=16, minimap=16), use_feature_units=True),
                 game_steps_per_episode=10000) as env:
-
+                
+                        # .reset returns TimeStep object. 
+                        # TimeStep object composed of ['step_type', 'reward', 'discount', 'observation']
                         agent.setup(env.observation_spec(), env.action_spec())
-                        timesteps = env.reset()
-                        agent.reset()
-
-                        while True:
+                        timesteps = env.reset()  
+                        agent.reset() 
+                        
+                        # .step takes an action and updates environment.
+                        # basically i think i just need to pick action (return) and update network
+                        # could also try adding to buffer in here
+                        while True:  
                             step_actions = [agent.step(timesteps[0])]
                             if timesteps[0].last():
                                 break
