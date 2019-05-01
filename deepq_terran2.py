@@ -128,7 +128,7 @@ def learn(env,
         optimizer=tf.train.AdamOptimizer(lr),
         gamma=gamma,
         grad_norm_clipping=10,
-        score='deepq_x')
+        scope='deepq_x')
 
     act_y, train_y, update_target_y, debug_y = deepq.build_train(
         make_obs_ph = make_obs_ph,
@@ -137,7 +137,7 @@ def learn(env,
         optimizer=tf.train.AdamOptimizer(lr),
         gamma=gamma,
         grad_norm_clipping=10,
-        score='deepq_y')
+        scope='deepq_y')
 
     act_params = {
     'make_obs__ph': make_obs_ph,
@@ -224,7 +224,7 @@ def learn(env,
             reset = False
             coord = [player[0], player[1]]
             r = 0
-            coord = [action_x, action_y]  # remember: action_x/y represent individual coords. why two coord?
+            coord = [action_x, action_y]  #  why two coord?
             
             #*** got rid of a bunch of minigame specific actions here. Not sure what else needs to be put here/moved around.
             
@@ -247,10 +247,9 @@ def learn(env,
                 player_y, player_x = (player_relative == _PLAYER_FRIENDLY).nonzero()
                 player = [int(player_x.mean()), int(player_y.mean())]
 
-                # Select all marines first
+                # Select all marines first -- do i need?
                 env.step(actions=[sc2_actions.FunctionCall(_SELECT_ARMY, [_SELECT_ALL])])
                 episode_rewards.append(0.0)
-                #episode_minerals.append(0.0)
 
                 reset = True
 
@@ -276,7 +275,7 @@ def learn(env,
                 if prioritized_replay:
                     new_priorities_x = np.abs(td_errors_x) + prioritized_replay_eps
                     new_priorities_y = np.abs(td_errors_x) + prioritizied_replay_eps
-                    replay_buffer_x.update_priorities(batch_idxes_x, new_priorities_x)  # what exactly does this do again?
+                    replay_buffer_x.update_priorities(batch_idxes_x, new_priorities_x)  
                     replay_buffer_y.update_priorities(batch_idxes_y, new_priorities_y) 
 
 
@@ -309,12 +308,23 @@ def learn(env,
               if print_freq is not None:
                 logger.log("Restored model with mean reward: {}".format(saved_mean_reward))
               U.load_state(model_file)
-
+    
+    ### print test act vs. ActWrapper:
+    print(f'ActWrapper around act_x: {ActWrapper(act_x)}')
+    print(f'act_x: {act_x}')
     return ActWrapper(act_x), ActWrapper(act_y)
 
 
+
+######################################################################################
+# act: chooses an action based on observation. returns a tensor of shape (BATCH_SIZE,)
+# with an action to be performed for every element of the batch.
+# train: function that takes transition and optimizes Bellman Error. returns array of shape 
+# (batch_size,) with differences between Q and target (TD error) for each element.
+######################################################################################
+
+
 def main():
-    agent = TerranAgent()
     map ='Simple64'
     try:
         while True:  # not sure about these args either
@@ -331,12 +341,13 @@ def main():
                     model = deepq.models.cnn_to_mlp(
                           convs=[(16, 8, 4), (32, 4, 2)], hiddens=[256], dueling=True)
                     
-                    act = deepq_mineral_shards.learn(
+                    timesteps = env.reset()  
+                    act = deepq_mineral_shards.learn(  # could test with max_timesteps=0. that should be able to run at least
                         env,
                         q_func=model,
-                        num_actions=16,  # need to change this
-                        lr=FLAGS.lr,
-                        max_timesteps=FLAGS.timesteps,
+                        num_actions=16,  # need to change this (most of them probably)
+                        lr=5e-4,
+                        max_timesteps=200000,
                         buffer_size=25000,
                         exploration_fraction=FLAGS.exploration_fraction,
                         exploration_final_eps=0.01,
@@ -346,23 +357,25 @@ def main():
                         gamma=0.99,
                         prioritized_replay=True,
                         callback=deepq_callback)
-#                         act.save("mineral_shards.pkl")
+                        act.save("/home/lbianculli/mineral_shards.pkl")
 
-
-#                         agent.setup(env.observation_spec(), env.action_spec())
-#                         timesteps = env.reset()  
-#                         agent.reset() 
-
-#                         while True:  
-#                             step_actions = [agent.step(timesteps[0])]
-#                             if timesteps[0].last():
-#                                 break
-#                             timesteps = env.step(step_actions)
-
+                        # .reset returns TimeStep object, .step takes an action and returns TimeStep object
+                        # ['step_type', 'reward', 'discount', 'observation']  
+                        while True:  
+                            print(f'step type: {time_steps[0]}, obs: {time_steps[3]}')  # -> step_type vs. observation?
+#                             step_actions = [agent.step(timesteps[0])]  # from part_scripted -- this step takes obs
+#                             timesteps = env.step(step_actions)  # this step takes action
+                            if timesteps[0].last():  # instead of setting up done
+                                break
+                            # this is the key, just need to find some way to get action in correct format step thru
+                            # if unable to do that, is there any way to set this up within the function itself?
+                            obs = timesteps[0]  # do i want this below or above timesteps? does it matter?
+                            timesteps = env.step(act(obs[None])[0])  # where i think 0 corresponds to the action at step[0] ***
+#                             obs, rew, _, _ = env.step()  # dont think i need this                          
+                            
+                            
     except KeyboardInterrupt:
         pass
-
-
 
 if __name__ == 'main':
     main()
