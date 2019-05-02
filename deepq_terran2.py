@@ -1,6 +1,3 @@
-# https://github.com/chris-chris/pysc2-examples/blob/master/deepq_mineral_shards.py
-# i think for this, not gonna use an agent?
-
 import numpy as np
 import os
 import dill
@@ -178,7 +175,7 @@ def learn(env,
 
     episode_rewards = [0.0]
     saved_mean_reward = None
-    
+
     # Now onto the actual SC2 interaction -- everything below this is guesswork thusfar. forget how this works
     obs = env.reset()
     screen = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.NEUTRAL).astype(int)
@@ -225,9 +222,9 @@ def learn(env,
             coord = [player[0], player[1]]
             r = 0
             coord = [action_x, action_y]  #  why two coord?
-            
+
             #*** got rid of a bunch of minigame specific actions here. Not sure what else needs to be put here/moved around.
-            
+
             r = obs[0].reward
             done = obs[0].step_type == environment.StepType.LAST  # something like this
 
@@ -253,7 +250,7 @@ def learn(env,
 
                 reset = True
 
-            if t > learning_start and t % train_freq == 0:  
+            if t > learning_start and t % train_freq == 0:
                 # minimize the error of Bellman equation on a batch sampled from replay buffer
                 if prioritized_replay:
                     experience_x = replay_buffer_x.sample(batch_size, beta=beta_schedule_x.value(t))
@@ -269,14 +266,14 @@ def learn(env,
                     obs_t_y, actions_y, rewards_y, obs_tp1_y, dones_y = replay_buffer_y.sample(batch_size)
                     weights_y, batch_idxes_y = np.ones_like(rewards_y), None
 
-                td_errors_x = train_x(obs_t_x, actions_x, rewards_x, obs_tp1_x, dones_x, weights_x) 
-                td_errors_y = train_y(obs_t_y, actions_y, rewards_y, obs_tp1_y, dones_y, weights_y) 
+                td_errors_x = train_x(obs_t_x, actions_x, rewards_x, obs_tp1_x, dones_x, weights_x)
+                td_errors_y = train_y(obs_t_y, actions_y, rewards_y, obs_tp1_y, dones_y, weights_y)
 
                 if prioritized_replay:
                     new_priorities_x = np.abs(td_errors_x) + prioritized_replay_eps
                     new_priorities_y = np.abs(td_errors_x) + prioritizied_replay_eps
-                    replay_buffer_x.update_priorities(batch_idxes_x, new_priorities_x)  
-                    replay_buffer_y.update_priorities(batch_idxes_y, new_priorities_y) 
+                    replay_buffer_x.update_priorities(batch_idxes_x, new_priorities_x)
+                    replay_buffer_y.update_priorities(batch_idxes_y, new_priorities_y)
 
 
             if t > learning_stats and t % target_network_update_freq == 0:  # if its time to update target network
@@ -285,7 +282,7 @@ def learn(env,
 
             mean_100ep_reward = round(np.mean(episode_rewards[-101:-1]), 1)
             num_episodes = len(episode_rewards)
-            
+
             ### --- lot of logging below --- ###
             if done and print_freq is not None and len(episode_rewards) % print_freq == 0:
                 logger.record_tabular("steps", t)
@@ -308,7 +305,7 @@ def learn(env,
               if print_freq is not None:
                 logger.log("Restored model with mean reward: {}".format(saved_mean_reward))
               U.load_state(model_file)
-    
+
     ### print test act vs. ActWrapper:
     print(f'ActWrapper around act_x: {ActWrapper(act_x)}')
     print(f'act_x: {act_x}')
@@ -319,29 +316,29 @@ def learn(env,
 ######################################################################################
 # act: chooses an action based on observation. returns a tensor of shape (BATCH_SIZE,)
 # with an action to be performed for every element of the batch.
-# train: function that takes transition and optimizes Bellman Error. returns array of shape 
+# train: function that takes transition and optimizes Bellman Error. returns array of shape
 # (batch_size,) with differences between Q and target (TD error) for each element.
 ######################################################################################
+### NEEDS TO BE IN AGENT
 
-
-def main():
-    map ='Simple64'
+def main(unused_argv):
+    map ='Blackpink'
     try:
         while True:  # not sure about these args either
             with sc2_env.SC2Env(
                 map_name=map,
                 step_mul=8,
                 visualize=True,
-                players=[sc2_env.Agent(sc2_env.Race.terran), sc2_env.Bot(sc2_env.Race.terran, sc2_env.Difficulty.very_easy)],
+                players=[sc2_env.Bot(sc2_env.Race.terran, sc2_env.Difficulty.very_easy), sc2_env.Bot(sc2_env.Race.terran, sc2_env.Difficulty.very_easy)],
                 agent_interface_format=features.AgentInterfaceFormat(
                         feature_dimensions=features.Dimensions(screen=16, minimap=16), use_feature_units=True),
-                game_steps_per_episode=10000) as env:
-                    
-                    
+                game_steps_per_episode=0) as env:
+
+
                     model = deepq.models.cnn_to_mlp(
                           convs=[(16, 8, 4), (32, 4, 2)], hiddens=[256], dueling=True)
-                    
-                    timesteps = env.reset()  
+
+                    timesteps = env.reset()
                     act = deepq_mineral_shards.learn(  # could test with max_timesteps=0. that should be able to run at least
                         env,
                         q_func=model,
@@ -357,26 +354,27 @@ def main():
                         gamma=0.99,
                         prioritized_replay=True,
                         callback=deepq_callback)
-                        act.save("/home/lbianculli/mineral_shards.pkl")
+                    act.save("/home/lbianculli/mineral_shards.pkl")
 
-                        # .reset returns TimeStep object, .step takes an action and returns TimeStep object
-                        # ['step_type', 'reward', 'discount', 'observation']  
-                        while True:  
-                            print(f'step type: {time_steps[0]}, obs: {time_steps[3]}')  # -> step_type vs. observation?
-#                             step_actions = [agent.step(timesteps[0])]  # from part_scripted -- this step takes obs
-#                             timesteps = env.step(step_actions)  # this step takes action
-                            if timesteps[0].last():  # instead of setting up done
-                                break
-                            # this is the key, just need to find some way to get action in correct format step thru
-                            # if unable to do that, is there any way to set this up within the function itself?
-                            obs = timesteps[0]  # do i want this below or above timesteps? does it matter?
-                            timesteps = env.step(act(obs[None])[0])  # where i think 0 corresponds to the action at step[0] ***
-#                             obs, rew, _, _ = env.step()  # dont think i need this                          
-                            
-                            
+                    # .reset returns TimeStep object, .step takes an action and returns TimeStep object
+                    # ['step_type', 'reward', 'discount', 'observation']
+#                     while True:
+#                           # -> step_type vs. observation?
+# #                             step_actions = [agent.step(timesteps[0])]  # from part_scripted -- this step takes obs
+#                         timesteps = env.step(actions.FUNCTIONS.no_op)  # this step takes action
+#                         if timesteps[0].last():  # instead of setting up done
+#                             break
+#                         # this is the key, just need to find some way to get action in correct format step thru
+#                         # if unable to do that, is there any way to set this up within the function itself?
+#                         obs = timesteps[0]  # do i want this below or above timesteps? does it matter?
+#                         # timesteps = env.step(act(obs[None])[0])  # where i think 0 corresponds to the action at step[0] ***
+# #                             obs, rew, _, _ = env.step()  # dont think i need this
+#                         print(f'step type: {time_steps[0]}, obs: {time_steps[3]}')
+
+
     except KeyboardInterrupt:
         pass
 
 if __name__ == 'main':
-    main()
+    app.run(main)
 
