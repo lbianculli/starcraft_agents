@@ -24,7 +24,7 @@ def load(self, sess):
 
 def write_summary(self, sess, states, actions, targets, score):
     ''' Write session summary to TensorBoard '''
-    global_episode = self.global_episode.eval(sess)  # what is global_episode at runtime?
+    global_episode = self.global_episode.eval(sess)  # what is global_episode at runtime? -- variable with shape 0
     summary = sess.run([self.loss, self.optimizer],
                        feed_dict = {self.inputs: states,
                                     self.actions: actions,
