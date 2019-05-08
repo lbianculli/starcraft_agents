@@ -17,7 +17,7 @@ FEATURE_MINIMAP_SIZE = [32,32]  # not actually needed for minigames
 FUNCTIONS = sc2_actions.FUNCTIONS
 
 
-class DQNMoveOnly(base_agent.BaseAgent):
+class DQNMoveOnlyAgent(base_agent.BaseAgent):
     ''' DQN that takes in player_relative features and returns movements '''
     
     def __init__(self, 
