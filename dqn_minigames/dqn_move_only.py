@@ -154,7 +154,7 @@ class DQNMoveOnly(base_agent.BaseAgent):
             inputs = np.expand_dims(state, 0)  # state = obs (from above)
             q_values = self.sess.run(self.network.flatten, feed_dict={self.network.inputs:inputs})  # why need to flatten?
             best_action = np.argmax(q_values)
-            x, y = np.unravel_index(max_index, feature_screen_size)
+            x, y = np.unravel_index(max_index, FEATURE_SCREEN_SIZE)
             return x, y, 'nonrandom'
         
         
