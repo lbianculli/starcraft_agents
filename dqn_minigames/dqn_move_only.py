@@ -10,7 +10,8 @@ from collections import deque
 from pysc2.agents import base_agent
 from pysc2.lib import actions as sc2_actions
 
-
+FEATURE_SCREEN_SIZE = [32,32]
+FEATURE_MINIMAP_SIZE = [32,32]
 FUNCTIONS = sc2_actions.FUNCTIONS
 
 # class memory is at the top, reconcile w/ replay buffer if possible
@@ -61,8 +62,22 @@ class DQNMoveOnly(base_agent.BaseAgent):
         self.save_path = save_dir + ckpt_name + ".ckpt"
         print("Building models...")
         tf.reset_default_graph()   
-#         self.network = 
-
+        self.network = PlayerRelativeMovementCNN(self,
+                                                 spatial_dims=FEATURE_SCREEN_SIZE,
+                                                 learning_rate=self.learning_rate,
+                                                 save_path=self.save_path,
+                                                 summ_path=self.summary_path,
+                                                 name='DQN')
+        if self.training:  # set up target_net
+            self.target_network = PlayerRelativeMovementCNN(self,
+                                                            spatial_dims=FEATURE_SCREEN_SIZE,
+                                                            learning_rate=self.learning_rate,
+                                                            name='target_network')
+            
+        print('Initialization complete.')
+        self.last_state = None
+        self.last_action = None
+        
         
     def reset(self):
         ''' reset episode '''
@@ -86,5 +101,76 @@ class DQNMoveOnly(base_agent.BaseAgent):
             self._handle_episode_end()
             
         if FUNCTIONS.Move_screen.id in obs.observation.available_actions:
+            state = obs.observation.feature_screen.player_relative
+            
+            if self.training:
+                # predict and take an action
+                x, y, action = self._epsilon_greedy_action_selection(state)
+                
+                # update online DQN 
+                # ...
+
+    
+    def _handle_episode_end(self):
+        ''' Save weights and write summaries '''
+        self.network.increment_global_episode_op(self.sess)
+        
+        #save current model and write summaries
+        self.network.save_model(self.sess)
+        states, actions, targets = self.get_batch()
+        self.network.write_summary(self.sess, states, actions, targets, self.reward)
+        print('Model saved and summaries written.')
+        
+    def _tf_init(self):
+        init_op = tf.global_variables_initializer()
+        self.sess.run(init_op)
+        
+        
+    def _update_target_networks(self):
+        online_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'DQN') # what does this do exactly?
+        target_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'target_network')
+        
+        update_op = []
+        for online_var, target_var in zip(online_vars, target_vars):
+            update_op.append(target_var.assign(online_var))  # what is this ? 
+            
+        self.sess.run(update_op)
+        
+        
+    def _epsilon_greedy_action(self, state, epsilon=None):
+        ''' Choose an action from the state with eps greedy *** needs updates *** '''
+        step = self.network.global_step.eval(self.sess)  #global_step +1 after the variables have been updated (opt/loss?)
+        
+        if epsilon is None:
+            epsilon = max(self.epsilon_min,
+                          (self.epsilon_max - ((self.epsilon_max - self.epsilon_min) * step / self.epsilon_decay_steps)))
+            
+        if epsilon > np.random.rand():
+            x = np.random.randint(0, feature_screen_size[0])
+            y = np.random.randint(0, feature_screen_size[1])
+            
+            return x, y, random
+        else:
+            inputs = np.expand_dims(state, 0)  # state = obs (from above)
+            q_values = self.sess.run(self.network.flatten, feed_dict={self.network.inputs:inputs})  # why need to flatten?
+            best_action = np.argmax(q_values)
+            x, y = np.unravel_index(max_index, feature_Screen_size)
+            return x, y, 'nonrandom'
+        
+        
+    def _train_network(self):
+            
+        
+
+        
+        
+                
+                
+              
+            
+            
+            
+            
+            
             
 
