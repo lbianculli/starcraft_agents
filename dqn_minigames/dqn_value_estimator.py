@@ -18,7 +18,7 @@ class PlayerRelativeMovementCNN():
         self.summ_path = summ_path
         self.name = name
 
-        self._build() # ...
+        self._build()
         
         if summary_path:
             # setup summary saver
@@ -84,7 +84,7 @@ class PlayerRelativeMovementCNN():
             self.increment_global_episode = tf.assign(self.global_episode, self.global_episode + 1, name="increment_global_episode")
 
             # spatial coordinates are given in y-major screen coordinate space
-            # transpose them to (x, y) space before beginning # filter: hwio; input: bhwc
+            # transpose them to (x, y) space before beginning # filter: hwio; input: nhwc
             self.transposed = tf.transpose(self.inputs, perm=[0, 2, 1], name="transpose")
             self.one_hot = tf.one_hot(self.transposed, depth=5, axis=-1, name="one_hot")  # [None, 64, 64, 5] -- one hot the categorical features
 
@@ -96,7 +96,7 @@ class PlayerRelativeMovementCNN():
             self.conv1 = tf.nn.conv2d(self.embed, conv1_filters, strides=[1, 1, 1, 1], padding="SAME", name="conv1")
             self.conv1_act = tf.nn.relu(self.conv1, name='conv1_act')
 
-            output_filters = tf.get_var(name='output_filters', shape=[64, 64, 16, 1])
+            output_filters = tf.get_var(name='output_filters', shape=[64, 64, 16, 1])  # output will be scalar q-value (?)
             self.output = tf.nn.conv2d(self.conv1_act, output_filter, strides=[1, 1, 1, 1], padding='SAME', name='output')
 
             self.flat = tf.layers.flatten(self.output, name='flat')  # ex: [None, 4, 4] --> [None, 16]
