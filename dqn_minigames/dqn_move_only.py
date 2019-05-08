@@ -9,12 +9,13 @@ from absl import flags
 from collections import deque
 from pysc2.agents import base_agent
 from pysc2.lib import actions as sc2_actions
+from openai.baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 
-FEATURE_SCREEN_SIZE = [32,32]
-FEATURE_MINIMAP_SIZE = [32,32]
+
+FEATURE_SCREEN_SIZE = [32,32]  # should these be len 2?
+FEATURE_MINIMAP_SIZE = [32,32]  # not actually needed for minigames
 FUNCTIONS = sc2_actions.FUNCTIONS
 
-# class memory is at the top, reconcile w/ replay buffer if possible
 
 class DQNMoveOnly(base_agent.BaseAgent):
     ''' DQN that takes in player_relative features and returns movements '''
@@ -35,7 +36,6 @@ class DQNMoveOnly(base_agent.BaseAgent):
                  ckpt_name=None,
                  summary_path=None):
         super(DQNMoveOnly, self).__init__()
-        # skipping some for now, make sure to finish later. can also look at baselines for default values
         
         # saving and writing
         if save_dir:
@@ -70,16 +70,14 @@ class DQNMoveOnly(base_agent.BaseAgent):
                                                  save_path=self.save_path,
                                                  summ_path=self.summary_path,
                                                  name='DQN')
-        if self.training:  # set up target_net
+        if self.training:  
+            # set up target_net and initialize replay buffer
             self.target_network = PlayerRelativeMovementCNN(self,
                                                             spatial_dims=FEATURE_SCREEN_SIZE,
                                                             learning_rate=self.learning_rate,
                                                             name='target_network')
-
-            # initialize Experience Replay memory buffer
             self.replay_buffer = ReplayBuffer(max_buffer_size)
             self.batch_size = batch_size
-
             
         print('Initialization complete.')
         self.last_state = None
@@ -97,6 +95,7 @@ class DQNMoveOnly(base_agent.BaseAgent):
             
             episode = self.network.global_episode.eval(self.sess)
             print(f'Global episode number: {episode+1}')
+            
 
     def step(self, obs):
         ''' If no units selected, selects army. Otherwise, move. '''
@@ -152,6 +151,7 @@ class DQNMoveOnly(base_agent.BaseAgent):
         self.network.write_summary(self.sess, states, actions, targets, self.reward)
         print('Model saved and summaries written.')
         
+        
     def _tf_init(self):
         init_op = tf.global_variables_initializer()
         self.sess.run(init_op)
@@ -182,16 +182,17 @@ class DQNMoveOnly(base_agent.BaseAgent):
             y = np.random.randint(0, feature_screen_size[1])
             
             return x, y, random
+        
         else:
             inputs = np.expand_dims(state, 0)  # state = obs (from above)
             q_values = self.sess.run(self.network.flatten, feed_dict={self.network.inputs:inputs})  # flatten for unravel
             best_action = np.argmax(q_values)
             x, y = np.unravel_index(max_index, FEATURE_SCREEN_SIZE)  # not entirely sure why this is best, complicated
+            
             return x, y, 'nonrandom'
         
         
     def _train_network(self):
-        ''' runs optimization for online network '''
         states, actions, targets = self._get_batch()
         self.network.optimizer_op(self.sess, states, actions, targets)
             
