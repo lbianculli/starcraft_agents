@@ -1,5 +1,3 @@
-import numpy as np
-import os
 import tensorflow as tf
 from collections import deque
 import logging
@@ -31,8 +29,8 @@ class a2cAgent(base_agent.BaseAgent):
                  value_gradient_strength=.1,  # check these
                  regularization_strength=.05,
                  gamma=.99,
-                 training_start=100,
-                 training_steps=1000,  # also this
+                 training_start=500,
+                 training_steps=250,  # steps between training ops. whats good value here? kept low so that cpu could run
                  training=True,
                  save_dir='/home/lbianculli/sc_bot/full_games/logs/ckpts/',
                  ckpt_name='collect_minerals_5-09',
@@ -80,25 +78,24 @@ class a2cAgent(base_agent.BaseAgent):
             self._init_op()
 
 
-
     def reset(self):
         # reset isnt currently running.
         self.episodes += 1
         self.steps = 0
         self.reward = 0
-        self.logger.info('EPISODE RESET')
 
         if self.training:
-
             self.last_action = None
             self.state_buffer = deque(maxlen=self.training_steps)
             self.action_buffer = deque(maxlen=self.training_steps)
-            self.rewards_buffer = deque(maxlen=self.training_steps)
+            self.reward_buffer = deque(maxlen=self.training_steps)
             self.global_episode = self.network.global_episode.eval(self.sess)
 
 
     def step(self, obs):
         self.steps += 1
+        if self.steps % 10 == 0:
+            self.logger.info(f'STEP NUMBER: {self.steps}')
         self.reward += obs.reward
 
         if self.training and obs.last():
@@ -107,7 +104,7 @@ class a2cAgent(base_agent.BaseAgent):
         observation = obs.observation
         screen_features = observation.feature_screen
         minimap_features = observation.feature_minimap
-        flat_features = observation.player  #*** seems like everything that makes up the step obs
+        flat_features = observation.player  # makes sense
         available_actions = observation.available_actions
 
         # sample action (function ID, args, arg_types) from policy
@@ -118,15 +115,17 @@ class a2cAgent(base_agent.BaseAgent):
 
         if self.training:
             if self.last_action:
-                self.state_buffer.appendleft(screen_features, minimap_features, flat_features)
+                self.state_buffer.appendleft((screen_features, minimap_features, flat_features))
                 self.action_buffer.appendleft(self.last_action)
-                self.rewards_buffer.appendleft(obs.reward)
+                self.reward_buffer.appendleft(obs.reward)
 
             # train if past certain amount of steps
             if (self.steps % self.training_steps == 0) and (self.steps > self.training_start):
                 self._train_network()
 
             self.last_action = [action_id, args, arg_types]
+
+        return FunctionCall(action_id, args)
 
 
     def _sample_action(self,
@@ -153,7 +152,7 @@ class a2cAgent(base_agent.BaseAgent):
 
         # renormalize distribution over function identifiers
         function_id_policy /= np.sum(function_id_policy)
-        self.logger.info(f'FUNCTION_ID_POLICY: {function_id_policy}')
+        # self.logger.info(f'FUNCTION_ID_POLICY: {function_id_policy}')
 
         # sample function identifier
         action_id = np.random.choice(function_ids, p=np.squeeze(function_id_policy))  # why do i need to squeeze here?
@@ -164,12 +163,12 @@ class a2cAgent(base_agent.BaseAgent):
         for arg_type in arg_types:
             if len(arg_type.sizes) > 1:
                 # this is a spatial action
-                self.logger.info(f'ARGUMENT POLICY DICT: self.network.argument_policy')
+                # self.logger.info(f'ARGUMENT POLICY DICT: {self.network.argument_policy.keys()}')
+                # i think this stuff looks good, but
                 x_policy = self.sess.run(self.network.argument_policy[str(arg_type) + 'x'],feed_dict=feed_dict)
                 y_policy = self.sess.run(self.network.argument_policy[str(arg_type) + 'y'], feed_dict=feed_dict)
 
-                self.logger.info(f'PRE SQUEEZE X_POLICY: {x_policy}')
-                x_policy = np.squeeze(x_policy)  # WHY SQUEEZE? BATCHSIZE?
+                x_policy = np.squeeze(x_policy)  # WHY SQUEEZE? BATCHSIZE?  squeeze bc it comes in as 2d (e.g: [[...]])
                 x_ids = np.arange(len(x_policy))
                 x_id = np.random.choice(x_ids, p=x_policy)
 
@@ -196,12 +195,15 @@ class a2cAgent(base_agent.BaseAgent):
         flat = [state_[2] for state_ in self.state_buffer]
 
         # actions and args. remember, last_action = [action, args, arg_types]
-        actions = [act_arg[0] for arg_arg in self.action_buffer]
+        actions = [act_arg[0] for act_arg in self.action_buffer]
+        self.logger.info(f'ACTIONS BEFORE EYE: {actions}')
         actions = np.eye(len(FUNCTIONS))[actions]  # what exactly does this do?
+        self.logger.info(f'ACTIONS AFTER EYE: {actions}')
+
         args = [act_arg[1] for act_arg in self.action_buffer]
         arg_types = [act_arg[2] for act_arg in self.action_buffer]
-        self.logger.info(f'ARGS: {args}')
-        self.logger.info(f'ARG TYPES: {arg_types}')
+        # self.logger.info(f'ARGS: {args}')  # look like coords
+        # self.logger.info(f'ARG TYPES: {arg_types}')  # these are arg types from before. include all function argument types
 
         # rewards
         raw_rewards = list(self.reward_buffer)
@@ -224,20 +226,20 @@ class a2cAgent(base_agent.BaseAgent):
                      self.network.minimap_inputs: minimap,
                      self.network.flat_inputs: flat,
                      self.network.actions: actions,
-                     self.network.rewards: upd_rewards}
+                     self.network.reward: upd_rewards}
 
         # add args and arg_types to feed_dict
         net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type
         batch_size = len(arg_types)
 
         for arg_type in sc2_actions.TYPES:
-            if len(arg_type.size) > 1:
+            if len(arg_type.sizes) > 1:
                 if arg_type in SCREEN_TYPES:
-                    x_size = FEATURE_SCREEN_SIZE[0]
+                    x_size = FEATURE_SCREEN_SIZE[0]  #  screen pixels (x)
                     y_size = FEATURE_SCREEN_SIZE[1]
                 elif arg_type in MINIMAP_TYPES:
                     x_size = FEATURE_MINIMAP_SIZE[0]
-                    y_size = FEATURE_MINIMAP_SIZE[1]
+                    y_size = FEATURE_MINIMAP_SIZE[1] # minimap pixles (y)
 
                 feed_dict[net_args[str(arg_type) + "x"]] = np.zeros(
                     (batch_size, x_size))
@@ -260,8 +262,8 @@ class a2cAgent(base_agent.BaseAgent):
                 else:
                     arg_key = net_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
-        self.logger.info(f'FEED DICT KEYS: {feed_dict.keys()}')
-        return feed_dict  # ending feed dict will have
+        # self.logger.info(f'FEED DICT KEYS: {feed_dict.keys()}')  # these are just placeholders
+        return feed_dict  # ending feed dict will have phs with corresponding binary (?)
 
 
 
@@ -279,11 +281,9 @@ class a2cAgent(base_agent.BaseAgent):
         # train network and increment episode
         feed_dict = self._train_network(terminal=True)
         self.network.increment_global_episode_op(self.sess)
-
         self.network.save_model(self.sess)
-        self.network.write_summary(self.sess, feed_dict)  # didnt implement this in the other file yet...
-
-        print('Model saved and summary written')  # do these print statements actually show at runtime?
+        self.network.write_summary(self.sess, feed_dict)
+        self.logger.info('Model saved and summary written')
 
 
     def _init_op(self):
@@ -299,3 +299,6 @@ class a2cAgent(base_agent.BaseAgent):
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
+
+
+
