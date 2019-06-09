@@ -23,7 +23,7 @@ class PlayerRelativeMovementCNN():
         if self.summary_path:
             # setup summary saver
             self.writer = tf.summary.FileWriter(self.summary_path)
-            tf.summary.scalar('loss', self.loss)
+            # tf.summary.scalar('loss', self.loss)  # not gonna work if using huber loss
             tf.summary.scalar('score', self.score)
             tf.summary.scalar('mean_q', self.mean_q)
             tf.summary.scalar('max_q', self.max_q)
@@ -64,22 +64,37 @@ class PlayerRelativeMovementCNN():
         self.writer.flush()
 
 
-
     def increment_global_episode_op(self, sess):
         ''' Increment the global episode tracker '''
         sess.run(self.increment_global_episode)
 
 
-    def optimizer_op(self, sess, states, actions, targets, ret=False):
-        ''' Perform one iteration of gradient updates '''
-        loss, _ = sess.run([self.loss, self.optimizer],
-                           feed_dict={self.inputs: states,
-                                      self.actions: actions,
-                                      self.targets: targets})
+    def _init_train_fn(self, var_list, grad_norm_clipping=10):
+        self.train_fn = self._minimize_and_clip(self.optimizer, self.loss,  var_list=var_list, clip_val=grad_norm_clipping)
 
-        if ret:
-            return loss
 
+    def optimizer_op(self, sess, states, actions, targets, var_list) :
+        '''
+        Perform one iteration of gradient updates.
+        Has to be a way to make this more dynamic
+        '''
+        loss, _ = sess.run([self.loss, self.train_fn], feed_dict={
+            self.inputs: states,
+            self.actions: actions,
+            self.targets: targets
+            })  # run at the end. literally exact same as regular
+
+
+    def _minimize_and_clip(self, optimizer, objective, var_list, clip_val=10):
+        """Minimized `objective` using `optimizer` w.r.t. variables in
+        `var_list` while ensure the norm of the gradients for each
+        variable is clipped to `clip_val`
+        """
+        gradients = optimizer.compute_gradients(objective, var_list=var_list)  # will need to do this in other dqn_move_only
+        for i, (grad, var) in enumerate(gradients):
+            if grad is not None:
+                gradients[i] = (tf.clip_by_norm(grad, clip_val), var)
+        return optimizer.apply_gradients(gradients, global_step=self.global_step)
 
 
     def _activation_summary(self, x):
@@ -107,14 +122,17 @@ class PlayerRelativeMovementCNN():
 
             # increment counts
             self.increment_global_episode = tf.assign(self.global_episode, self.global_episode + 1, name="increment_global_episode")
-            self.increment_global_step = tf.assign(self.global_step, self.global_step + 1, name="increment_global_step")
+            # if going to increment global step, should be done every time i run thru optimizer
 
-            # NOTE: spatial coordinates are given in y-major screen coordinate space
+            # spatial coordinates are given in y-major screen coordinate space
+            # transpose them to (x, y) space before beginning # filter: hwio; input: nhwc
             self.transposed = tf.transpose(self.inputs, perm=[0, 2, 1], name="transpose")
-            self.one_hot = tf.one_hot(self.transposed, depth=5, axis=-1, name="one_hot")  
-            embed_filters = tf.get_variable(name='embed_filters', shape=[64, 64, 5, 1])  # [None, 64, 64, 1]
-            self.embed = tf.nn.conv2d(self.one_hot, embed_filters, strides=[1, 1, 1, 1], padding="SAME", name="embed") 
+            self.one_hot = tf.one_hot(self.transposed, depth=5, axis=-1, name="one_hot")  # [None, 64, 64, 5] -- one hot the categorical features. why depth 5?
 
+            embed_filters = tf.get_variable(name='embed_filters', shape=[64, 64, 5, 1])  # [None, 64, 64, 1]
+            self.embed = tf.nn.conv2d(self.one_hot, embed_filters, strides=[1, 1, 1, 1], padding="SAME", name="embed") # pass thru 1x1 conv
+
+            # network architecture: using only one conv to start, can add later
             conv1_filters = tf.get_variable(name='layer1_filters', shape=[64, 64, 1, 16])
             self.conv1 = tf.nn.conv2d(self.embed, conv1_filters, strides=[1, 1, 1, 1], padding="SAME", name="conv1")
             self.conv1_act = tf.nn.relu(self.conv1, name='conv1_act')
@@ -129,8 +147,7 @@ class PlayerRelativeMovementCNN():
             self.max_q = tf.reduce_max(self.flat, name='max_q')
             self.mean_q = tf.reduce_mean(self.flat, name='mean_q')  # if axis=None, reduce along all dims (scalar)
 
-            # optimization: MSE between state predicted Q and target Q
+            # optimization: MSE between state predicted Q and target Q ### *** NEED TO CLEAN THIS UP --> consolidate losses and opts
             self.prediction = tf.reduce_sum(tf.multiply(self.flat, self.actions), axis=1, name='preds')
-            self.loss = tf.reduce_mean(tf.square(self.targets - self.prediction), name='loss') 
-            self.loss2 = tf.square(self.targets-self.prediction, name='loss2')  # element wise for priority updates
-            self.optimizer = tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss, global_step=self.global_step)
+            self.loss = huber_loss(self.targets-self.prediction)  # element wise for priority updates
+            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
