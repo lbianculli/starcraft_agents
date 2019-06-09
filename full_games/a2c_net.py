@@ -1,6 +1,3 @@
-''' This will be network for the agent '''
-# still need summary writer
-
 import numpy as np
 import tensorflow as tf
 from preprocessing import preprocess_spatial_features
@@ -8,8 +5,9 @@ from pysc2.lib import actions, features
 
 SCREEN_FEATURES = features.SCREEN_FEATURES
 MINIMAP_FEATURES = features.MINIMAP_FEATURES
-
-NUM_ACTIONS = len(actions.FUNCTIONS)
+SCREEN_DIMS = [32, 32]
+MINMAP_DIMS = [32, 32]
+NUM_ACTIONS = len(actions.FUNCTIONS)  # so num_actions is total possible actions
 
 # manually state the argument types which take points on screen/minimap
 SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]  # [a point on the screen, second point for a rectangle]
@@ -17,10 +15,9 @@ MINIMAP_TYPES = [actions.TYPES[1]]  # [point on the minimap]
 
 
 class AlphaCNN():
-    ''' uses feature_screen.player_relative to assign q value to movements '''
     def __init__(self,
-                 screen_dims=[32, 32],
-                 minimap_dims=[32, 32],
+                 screen_dims=SCREEN_DIMS,
+                 minimap_dims=MINIMAP_DIMS,
                  learning_rate=1e-4,
                  value_gradient_strength=.1,  # check these
                  regularization_strength=.05,
@@ -103,11 +100,11 @@ class AlphaCNN():
         self.score = tf.placeholder(tf.int32, [], name='score')
         self.screen_inputs = tf.placeholder(tf.int32, shape=[None, len(SCREEN_FEATURES), *self.screen_dims], name='screen_inputs')
         self.minimap_inputs = tf.placeholder(tf.int32, shape=[None, len(MINIMAP_FEATURES), *self.minimap_dims], name='minimap_inputs')
-        self.flat_inputs = tf.placeholder(tf.float32, shape=[None, len(features.Player)], name='flat_inputs')  #mins, gas, food, etc -- 10 total
+        self.flat_inputs = tf.placeholder(tf.float32, shape=[None, len(features.Player)], name='flat_inputs')  # env stuff: mins, gas, supply, etc -- 11 total
 
         self.inputs = tf.placeholder(tf.int32,[None, *self.screen_dims], name="inputs")  # [None, px1, px2]
         self.actions = tf.placeholder(tf.float32, [None, np.prod(self.screen_dims)], name='actions')
-        self.targets = tf.placeholder(tf.float32, [None], name="targets")
+        self.targets = tf.placeholder(tf.float32, [None], name="targets")  # so features.Player is broadcast vector.
 
         # preprocessing per rays github
         self.screen_preprocessed = preprocess_spatial_features(self.screen_inputs, screen=True)
@@ -136,7 +133,8 @@ class AlphaCNN():
         # linear layer for non-spatial features (tanh activation)
         flat_linear = tf.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  # i think this is 'info'/broadcast
 
-        # flatten layers and concat  (why do i need to flatten? would not flattening and concat along axis=3 work?)
+
+        # flatten layers and concat  (would not flattening and concat along axis=3 work?) NO b/c flat_linear is [None, 64]
         screen_flat = tf.layers.flatten(screen_conv2, name='screen_flat')
         minimap_flat = tf.layers.flatten(minimap_conv2, name='minimap_flat')
         concat_layer = tf.concat([screen_flat, minimap_flat, flat_linear], axis=1, name='concat_layer')
@@ -145,10 +143,9 @@ class AlphaCNN():
         self.state_representation = tf.layers.dense(concat_layer, 256, activation=tf.nn.relu, name='state_rep')
         self.function_policy = tf.squeeze(tf.layers.dense(
             inputs=self.state_representation,
-            units=NUM_ACTIONS,  # where is num actions initialized?
+            units=NUM_ACTIONS,
             activation=tf.nn.softmax,
-            name='policy'
-            ))
+            name='policy'))
 
         # action function argument policies (nonspatial)
         # action function argument placeholders (for optimization)`
