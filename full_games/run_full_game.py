@@ -1,3 +1,12 @@
+import importlib  # what exactly does this do?
+import threading
+
+from absl import flags, app  # should get more familiar w/ these too
+
+from pysc2 import maps
+from pysc2.env import run_loop as run_loop
+from pysc2.env import sc2_env, available_actions_printer
+from pysc2.lib import stopwatch, actions, features, units, point_flag
 from a2c_agent import a2cAgent
 
 
@@ -46,4 +55,7 @@ def main(unused_argv):
 
 if __name__ == '__main__':
     app.run(main)
+
+
+
 
