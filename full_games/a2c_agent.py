@@ -1,3 +1,5 @@
+import numpy as np
+import os
 import tensorflow as tf
 from collections import deque
 import logging
@@ -7,6 +9,7 @@ import a2c_net as nets
 from pysc2.agents import base_agent
 from pysc2.lib import actions as sc2_actions
 from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
+from pysc2.lib import features
 
 
 # agent interface settings (defaults specified in pysc2.bin.agent)
@@ -94,7 +97,7 @@ class a2cAgent(base_agent.BaseAgent):
 
     def step(self, obs):
         self.steps += 1
-        if self.steps % 10 == 0:
+        if self.steps % 100 == 0:
             self.logger.info(f'STEP NUMBER: {self.steps}')
         self.reward += obs.reward
 
@@ -299,6 +302,7 @@ class a2cAgent(base_agent.BaseAgent):
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
+
 
 
 
