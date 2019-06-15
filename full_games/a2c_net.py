@@ -6,7 +6,7 @@ from pysc2.lib import actions, features
 SCREEN_FEATURES = features.SCREEN_FEATURES
 MINIMAP_FEATURES = features.MINIMAP_FEATURES
 SCREEN_DIMS = [32, 32]
-MINMAP_DIMS = [32, 32]
+MINIMAP_DIMS = [32, 32]
 NUM_ACTIONS = len(actions.FUNCTIONS)  # so num_actions is total possible actions
 
 # manually state the argument types which take points on screen/minimap
