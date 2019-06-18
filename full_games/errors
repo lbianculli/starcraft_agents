@@ -7,9 +7,8 @@
 
 OPTIONS (is it a 19.04 problem?):
 - Going in order of what I should try first to last:
-	- py 3.6, tf 1.13, CUDA 10.0, CUDNN 7.4.1. --> check cudnn at /usr/include/cudnn.h. Also check /usr/local/cuda/bin/nvcc --version and/or 
-	/usr/local/cuda/version.txt
-	- Could try to download toolkit from archive.
+	- py 3.6, tf 1.13, CUDA 10.0, CUDNN 7.4.1. --> check cudnn at /usr/include/cudnn.h  and cudnn at  /usr/local/cuda/version.txt
+	- Could try to download toolkit from archive --> for cuda: /usr/local/cuda/bin/nvcc --version
 	- Docker and bazel (0.19.2) install 
 	- conda install on linux boot. If that doesnt work just uninstall and reinstall OS
 	
