@@ -3,3 +3,13 @@
 	 [[full_game_CNN/Squeeze/_63]]
   (1) Unknown: Failed to get convolution algorithm. This is probably because cuDNN failed to initialize, so try looking to see if a warning log message was printed above.
 	 [[{{node full_game_CNN/conv2d_5/Conv2D}}]]
+
+
+OPTIONS (is it a 19.04 problem?):
+- Going in order of what I should try first to last:
+	- py 3.6, tf 1.13, CUDA 10.0, CUDNN 7.4.1. --> check cudnn at /usr/include/cudnn.h. Also check /usr/local/cuda/bin/nvcc --version and/or 
+	/usr/local/cuda/version.txt
+	- Could try to download toolkit from archive.
+	- Docker and bazel (0.19.2) install 
+	- conda install on linux boot. If that doesnt work just uninstall and reinstall OS
+	
