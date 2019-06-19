@@ -4,11 +4,11 @@ import tensorflow as tf
 from collections import deque
 import logging
 
-import a2c_net as nets
+import a2c_net_tf2 as nets
 
 from pysc2.agents import base_agent
 from pysc2.lib import actions as sc2_actions
-from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
+# from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 from pysc2.lib import features
 
 
@@ -24,6 +24,10 @@ FunctionCall = sc2_actions.FunctionCall
 # manually state the argument types which take points on screen/minimap
 SCREEN_TYPES = [sc2_actions.TYPES[0], sc2_actions.TYPES[2]]
 MINIMAP_TYPES = [sc2_actions.TYPES[1]]
+
+tf.compat.v1.disable_v2_behavior()
+print(f'VERSION: {tf.__version__}')
+
 
 
 class a2cAgent(base_agent.BaseAgent):
@@ -62,7 +66,7 @@ class a2cAgent(base_agent.BaseAgent):
 
         self.save_path = save_dir + ckpt_name + '.ckpt'
 
-        tf.reset_default_graph()
+        tf.compat.v1.reset_default_graph()
         self.network = nets.AlphaCNN(
             screen_dims=FEATURE_SCREEN_SIZE,
             minimap_dims=FEATURE_MINIMAP_SIZE,
@@ -70,13 +74,17 @@ class a2cAgent(base_agent.BaseAgent):
             value_gradient_strength=value_gradient_strength,
             regularization_strength=regularization_strength,
             save_path=self.save_path,
-            summary_path=summary_path
-            )
+            summary_path=summary_path)
+        
         self.logger.info('Network initialization complete.')
 
-        self.sess = tf.Session()
+        config = tf.compat.v1.ConfigProto()
+        config.gpu_options.allow_growth = True
+
+        self.sess = tf.compat.v1.Session(config=config)
         if os.path.isfile(self.save_path + '.index'):
             self.network.load(self.sess)
+            self.logger.info('NETWORK RESUMED FROM LOAD')
         else:
             self._init_op()
 
@@ -199,9 +207,9 @@ class a2cAgent(base_agent.BaseAgent):
 
         # actions and args. remember, last_action = [action, args, arg_types]
         actions = [act_arg[0] for act_arg in self.action_buffer]
-        self.logger.info(f'ACTIONS BEFORE EYE: {actions}')
+        # self.logger.info(f'ACTIONS BEFORE EYE: {actions}')
         actions = np.eye(len(FUNCTIONS))[actions]  # what exactly does this do?
-        self.logger.info(f'ACTIONS AFTER EYE: {actions}')
+        # self.logger.info(f'ACTIONS AFTER EYE: {actions}')
 
         args = [act_arg[1] for act_arg in self.action_buffer]
         arg_types = [act_arg[2] for act_arg in self.action_buffer]
@@ -266,6 +274,7 @@ class a2cAgent(base_agent.BaseAgent):
                     arg_key = net_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
         # self.logger.info(f'FEED DICT KEYS: {feed_dict.keys()}')  # these are just placeholders
+        # self.logger.info(f'FEED DICT IN GET_BATCH: {feed_dict}')
         return feed_dict  # ending feed dict will have phs with corresponding binary (?)
 
 
@@ -274,7 +283,6 @@ class a2cAgent(base_agent.BaseAgent):
         ''' trains network with feed_dict from _get_batch '''
         feed_dict = self._get_batch(terminal)  # terminal if episode end
         self.network.optimizer_op(self.sess, feed_dict)
-
         return feed_dict  # use this in handle_episode_end
 
 
@@ -283,14 +291,16 @@ class a2cAgent(base_agent.BaseAgent):
 
         # train network and increment episode
         feed_dict = self._train_network(terminal=True)
+        # self.logger.info(f'FEED DICT IN EPISODE END: {feed_dict}')
+
         self.network.increment_global_episode_op(self.sess)
         self.network.save_model(self.sess)
-        self.network.write_summary(self.sess, feed_dict)
-        self.logger.info('Model saved and summary written')
+        self.network.write_summary(self.sess, self.glob_episode, self.reward, feed_dict)        
+        self.logger.info('Model saved and summary written')  
 
 
     def _init_op(self):
-        init_op = tf.global_variables_initializer()
+        init_op = tf.compat.v1.global_variables_initializer()
         self.sess.run(init_op)
 
 
@@ -302,7 +312,5 @@ class a2cAgent(base_agent.BaseAgent):
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
-
-
 
 
