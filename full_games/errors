@@ -12,3 +12,6 @@ OPTIONS (is it a 19.04 problem?):
 	- Docker and bazel (0.19.2) install 
 	- conda install on linux boot. If that doesnt work just uninstall and reinstall OS
 	
+*** Solved with:
+        config = tf.compat.v1.ConfigProto()
+        config.gpu_options.allow_growth = True
