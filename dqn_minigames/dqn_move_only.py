@@ -130,9 +130,9 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
                                                             save_path = self.target_save_path,
                                                             summary_path = self.target_summary_path,
                                                             name='target_network')
-
-        # initialize tf session
-        self.sess = tf.Session()
+        config = tf.ConfigProto()  # what else can I do with this?
+        config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=config)
         print('Initialization complete.')
 
         # check for and load networks/buffer if possible
