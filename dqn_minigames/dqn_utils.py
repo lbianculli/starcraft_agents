@@ -4,6 +4,23 @@ import gym
 import tensorflow as tf
 import numpy as np
 import random
+import os
+import shutil
+
+def clean_dir(parent_path, verbose=True, excluded_paths=[]):
+    '''
+    Given a directory, through and deletes all files from the topdown
+    Can specify files to save as a list
+    '''
+    for (root, dirs, files) in os.walk(parent_path, topdown=True):
+        if len(files) > 0:
+            for file in files:
+                child_path = root + '/' +  file
+
+                if os.path.isfile(child_path) and child_path not in excluded_paths:
+                    os.unlink(child_path)
+                    if verbose:
+                        print(f'{child_path} deleted')
 
 def huber_loss(x, delta=1.0):
     # https://en.wikipedia.org/wiki/Huber_loss
