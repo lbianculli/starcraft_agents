@@ -78,7 +78,7 @@ class BuildMarinesAgent():
 
         # load and set epsilon
         if os.path.isfile(self.save_file + '.npy'):
-            self.epsilon, self.initial_step = np.load(self.save_file + '.npy')  # can i just use loaded step for epsilon as well?
+            self.epsilon, self.initial_step = np.load(self.save_file + '.npy')  
             print(f'epsilon loaded: {self.epsilon}')
         else:
             self.epsilon = 1.0
@@ -88,14 +88,14 @@ class BuildMarinesAgent():
 
         # for saving and loading files
         if save_dir:
-            self.online_save_dir = save_dir + 'online/'  # for use in checkpoints
+            self.online_save_dir = save_dir + 'online/' 
             self.target_save_dir = save_dir + 'target/'
 
         if ckpt_name:
             self.ckpt_name = ckpt_name
 
         if summary_path:
-            self.online_summary_path = summary_path + 'online/' # for use in TB summaries
+            self.online_summary_path = summary_path + 'online/' 
             self.target_summary_path = summary_path + 'target/'
 
         if self.log:
@@ -143,13 +143,27 @@ class BuildMarinesAgent():
 
         self.online_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'DQN')
         self.target_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'target_network')
-        self.online_network._init_train_fn(self.online_vars, grad_norm_clipping=10)  # what are good values for clip?
-        self.target_network._init_train_fn(self.target_vars, grad_norm_clipping=10)
+        self.online_network._init_train_fn(self.online_vars, grad_norm_clipping=10) 
+        self.target_network._init_train_fn(self.target_vars, grad_norm_clipping=10)  # not sure if there are better values for clip
 
         print('online and target models loaded.')
         self._tf_init()
 
         if self.training:
-            self._update_target_network()  # do i still need this?
+            self._update_target_network()  
         else:
             self._tf_init()
+
+
+    def reset(self):
+        self.episodes += 1
+        self.reward = 0
+
+        if self.training:
+            self.last_state = None
+            self.last_action = None
+            self.episode = self.online_network.global_episode.eval(self.sess)
+
+
+    def step(self, obs):
+    	
