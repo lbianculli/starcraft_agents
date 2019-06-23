@@ -1,24 +1,19 @@
-"""Deep Q-learning agents."""
-# TODO: dueling DQN??? LOOK AT ALL NOTES PREFIXED W/ '***', EXP DECAY FOR LEARNING RATE?
-# OTHER: activations seem to be vanishing? Is this just because epislon greedy approach?
-
 import numpy as np
 import os
 import tensorflow as tf
 import logging
+import pickle
+import time
+
 from absl import flags
 from collections import deque
 from pysc2.agents import base_agent
 from pysc2.lib import actions as sc2_actions
 from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
-import pickle
-import time
-from checkpoint_tools import print_tensors_in_checkpoint_file
 from baselines.common.schedules import LinearSchedule
 
 from dqn_utils import LinearSchedule
-from dqn_value_estimator import PlayerRelativeMovementCNN
-
+from dqn_value_estimator import PlayerRelativeCNN
 
 
 FEATURE_SCREEN_SIZE = [32,32]  # should this be [32, 32] or 32? ??? clone his tomorrow to see if it works
@@ -32,27 +27,26 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
                  learning_rate=5e-4,  # could use linearschedule here as well?
                  gamma=.99,
                  epsilon_max=1.0,
-                 epsilon_min=0.02,
-                 epsilon_decay_steps=100000,
-                 learning_starts=2000,
-                 train_freq=10,
+                 epsilon_min=0.001,
+                 epsilon_decay_steps=300000,
+                 learning_starts=1000,
+                 train_freq=100,
                  target_update_freq=5000,
-                 max_buffer_size=50000,
+                 max_buffer_size=100000,
                  batch_size=16,
-                 prioritized_replay_beta_iters = 50000,  # in reality this would be max_steps -- for now just much larger than decay steps
+                 prioritized_replay_beta_iters = 300000,  # in reality this would be max_steps -- for now just much larger than decay steps
                  training=True,
                  indicate_nonrandom_action=False,
                  prioritized=True,
                  prioritized_alpha = .6,  # b=.7, a=.5 for rank-based prioritization
                  prioritized_beta = .4,  # "rank-based likely not as good for sparse-reward structures" ... clipping limits outliers
-                 save_file='/home/lbianculli/sc_bot/minigames/dqn_minigames/logs/network_saves',
-                 save_dir='/home/lbianculli/sc_bot/minigames/dqn_minigames/logs/ckpts/',
-                 ckpt_name='collect_minerals_5-09',
-                 summary_path='/home/lbianculli/sc_bot/minigames/dqn_minigames/logs/summaries/',
-                 buffer_path='/home/lbianculli/sc_bot/minigames/dqn_minigames/logs/buffers/buffer_5-09',
-                 logdir='/home/lbianculli/sc_bot/minigames/dqn_minigames/logs/variable_logs/',
+                 save_file='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/network_saves',
+                 save_dir='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/ckpts/',
+                 ckpt_name='collect_minerals_6-23',
+                 summary_path='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/summaries/',
+                 buffer_path='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/buffers/buffer_6-23',
+                 logdir='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/variable_logs.txt',
                  log=True):
-
         super(DQNMoveOnlyAgent, self).__init__()
 
         # NN hparams
@@ -75,7 +69,7 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         self.log = log
 
         # other
-        self.training = training  # not sure exactly
+        self.training = training  
         self.max_reward = 0
         self.total_reward = 0
         self.last_state = None
@@ -118,19 +112,21 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
             self.target_save_path = self.target_save_dir + ckpt_name + '.ckpt'
         print("Building models...")
         tf.reset_default_graph()
-        self.online_network = PlayerRelativeMovementCNN(spatial_dims=FEATURE_SCREEN_SIZE,
+        self.online_network = PlayerRelativeCNN(spatial_dims=FEATURE_SCREEN_SIZE,
                                                  learning_rate=self.learning_rate,
                                                  save_path=self.online_save_path,
                                                  summary_path=self.online_summary_path,
                                                  name='DQN')
         if self.training:
             # set up target_net and initialize replay buffer
-            self.target_network = PlayerRelativeMovementCNN(spatial_dims=FEATURE_SCREEN_SIZE,
+            self.target_network = PlayerRelativeCNN(spatial_dims=FEATURE_SCREEN_SIZE,
                                                             learning_rate=self.learning_rate,
                                                             save_path = self.target_save_path,
                                                             summary_path = self.target_summary_path,
                                                             name='target_network')
-        config = tf.ConfigProto()  # what else can I do with this?
+
+        # initialize tf session
+        config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)
         print('Initialization complete.')
@@ -179,25 +175,21 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         ''' If no units selected, selects army. Otherwise, move. '''
         self.steps += 1
         self.reward = obs.reward
+        state = obs.observation.feature_screen.player_relative
+
         if self.reward > self.max_reward:
             self.max_reward = self.reward
 
         # handle terminal steps:
-        if self.training and obs.last():
-            self._handle_episode_end()
-
-        if FUNCTIONS.Move_screen.id in obs.observation.available_actions:
-            state = obs.observation.feature_screen.player_relative
-
-
-            if self.training:  # calls with min epsilon = None
-                # predict and take an action
-                x, y, action = self._epsilon_greedy_action(state, self.epsilon)
+        if self.training 
+            if obs.last():
+                self._handle_episode_end()
+            else: 
+                x, y = self._epsilon_greedy_action(state, available_actions, self.epsilon)  # stopped here, not sure how to proceed
 
                 # update online DQN/target network if appropriate
                 if (self.steps % self.train_freq == 0) and (len(self.replay_buffer) > self.batch_size):
-                    self._train_network()  # obviously agent_step will result in less updates...
-
+                    self._train_network()  
 
                 if self.steps % self.target_update_freq == 0:
                     self._update_target_network()
@@ -208,16 +200,11 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
 
                 self.last_state = state
                 self.last_action = np.ravel_multi_index((x,y), FEATURE_SCREEN_SIZE)
+        else:
+            x, y = self.epsilon_greedy_action(state, available_actionsself.epsilon_min)
 
-            else:
-                x, y, action = self.epsilon_greedy_action(state, self.epsilon_min)
+        return FUNCTIONS.Move_screen('now', (x,y))
 
-            if self.indicate_nonrandom_action and action == 'nonrandom':
-                # cosmetic difference between random and Q based actions (???)
-                return FUNCTIONS.Attack_screen('now', (x, y))
-
-            else:
-                return FUNCTIONS.Move_screen('now', (x,y))
         else:
             return FUNCTIONS.select_army('select')
 
@@ -237,10 +224,9 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         self.logger.info(f'Total Game steps completed: {self.total_steps}')
         self.logger.info(f'Steps completed this run: {self.steps}')
         self.logger.info(f'Episodes completed this run: {self.episode+1}')
-        self.logger.info(f'Weight values: {self.batch_weights}')
+        # self.logger.info(f'Weight values: {self.batch_weights}')
         self.logger.info(f'Beta value: {self.beta_schedule.value(self.total_steps)}')
         self.logger.info(f'Epsilon: {self.epsilons[-1]}')
-
 
 
     def _handle_episode_end(self):
@@ -287,31 +273,33 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         self.sess.run(update_op)
 
 
-    def _epsilon_greedy_action(self, state, epsilon=1.0):
+    def _epsilon_greedy_action(self, state, available_actions, epsilon=1.0):  
+        ### how to coordinate w/in if so i can use cleanly above? ###
         ''' Choose an action from the state with eps greedy '''
-        self.total_steps = int(self.steps + self.initial_step)  # agent step differs from game step due to step mul. Also begins updating after opt
-
+        self.total_steps = int(self.steps + self.initial_step)  # agent step differs from game step due to step mul. 
         fraction = min(float(self.total_steps) / self.epsilon_decay_steps, 1.0)
-        upd_epsilon = epsilon + fraction * (self.epsilon_min - self.epsilon_max)
-        self.epsilons.append(upd_epsilon)  # for logging/loading
+        new_epsilon = epsilon + fraction * (self.epsilon_min - self.epsilon_max)
+        self.epsilons.append(new_epsilon)  # for logging/loading
 
-        if upd_epsilon > np.random.rand():
+        if new_epsilon > np.random.rand():  # chooses random action
+            action = np.random.choice(available_actions)
             x = np.random.randint(0, FEATURE_SCREEN_SIZE[0])
             y = np.random.randint(0, FEATURE_SCREEN_SIZE[1])
 
-            return x, y, 'random'
+            return x, y, action
 
-        else:
+        else:  
+            # what about this? can it stay the same?
             inputs = np.expand_dims(state, 0)  # state = obs (from above)
             q_values = self.sess.run(self.online_network.flat, feed_dict={self.online_network.inputs:inputs})  # flatten for unravel
-            best_action = np.argmax(q_values)
+            best_action = np.argmax(q_values)  # best bet might be changing this? has to be an easier way
             x, y = np.unravel_index(best_action, FEATURE_SCREEN_SIZE)  # not entirely sure why this is best, complicated
 
-            return x, y, 'nonrandom'
+            return x, y
 
 
     def _train_network(self):
-        # if self.steps >= self.learning_starts:
+        ''' run optimization '''
         states, actions, targets = self._get_batch()
         self.online_network.optimizer_op(self.sess, states, actions, targets, self.online_vars)
 
@@ -366,8 +354,4 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         self.replay_buffer.update_priorities(idxes, new_priorities)
 
         return obses, actions, targets
-
-
-
-
 
