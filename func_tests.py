@@ -208,8 +208,12 @@ class SmartAgent(base_agent.BaseAgent):
     def step(self, obs):  # obs is the game observation -- feature maps
         super(SmartAgent, self).step(obs)
         self.logger.info(f'Function types: {actions.FUNCTION_TYPES}')  # dont think particularly useful, just checking
-        self.logger.info(f'functions: {actions._FUNCTIONS}') # think this is key
+        self.logger.info(f'functions list: {actions._FUNCTIONS}') # think this is key
+        self.logger.info(f'functions dict(?): {actions._Functions}')
+        self.logger.info(f'functions available: {actions.FUNCTIONS_AVAILABLE}') 
         self.logger.info(f'specific function: {actions._FUNCTIONS[1]}')
+        self.logger.info(f'specific function -- which is useful?: {actions.FUNCTIONS[1]}')
+        
         if obs.last():
             print('last')
             reward = obs.reward
