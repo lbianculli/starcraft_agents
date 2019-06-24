@@ -90,7 +90,6 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
             self.initial_step = 0
         self.epsilons = [self.epsilon]
 
-
         # for saving and loading files
         if save_dir:
             self.online_save_dir = save_dir + 'online/'  # for use in checkpoints
@@ -124,7 +123,6 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
                                                             save_path = self.target_save_path,
                                                             summary_path = self.target_summary_path,
                                                             name='target_network')
-
         # initialize tf session
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
@@ -159,7 +157,7 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         else:
             self._tf_init()
 
-
+            
     def reset(self):
         ''' reset episode '''
         self.episodes += 1
@@ -201,7 +199,7 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
                 self.last_state = state
                 self.last_action = np.ravel_multi_index((x,y), FEATURE_SCREEN_SIZE)
         else:
-            x, y = self.epsilon_greedy_action(state, available_actionsself.epsilon_min)
+            x, y = self.epsilon_greedy_action(state, available_actions, self.epsilon_min)
 
         return FUNCTIONS.Move_screen('now', (x,y))
 
@@ -287,15 +285,15 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
             y = np.random.randint(0, FEATURE_SCREEN_SIZE[1])
 
             return x, y, action
-
         else:  
             # what about this? can it stay the same?
             inputs = np.expand_dims(state, 0)  # state = obs (from above)
             q_values = self.sess.run(self.online_network.flat, feed_dict={self.online_network.inputs:inputs})  # flatten for unravel
             best_action = np.argmax(q_values)  # best bet might be changing this? has to be an easier way
+            self.logger.info(f'Best action: {best_action}')  # how to represent an action in here? Prob a storage issue.
             x, y = np.unravel_index(best_action, FEATURE_SCREEN_SIZE)  # not entirely sure why this is best, complicated
 
-            return x, y
+            return x, y, action
 
 
     def _train_network(self):
