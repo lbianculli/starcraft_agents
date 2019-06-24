@@ -132,7 +132,18 @@ class SmartAgent(base_agent.BaseAgent):
         # if file exists, load the learning table from it. Preserves learning history
         if os.path.isfile(DATA_FILE + '.gz'):
             self.qlearn.q_table = pd.read_pickle(DATA_FILE + '.gz', compression='gzip')
-
+            
+        self._init_logger('C:/users/lbianculli/func_log.txt')
+        
+    def init_logger(self, dir):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        file_handler = logging.FileHandler(dir, mode='w')
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        
     def is_selected(self, obs, unit_type):
         if (len(obs.observation.single_select) > 0 and  # if we have a single item selected and it's a larva
             obs.observation.single_select[0].unit_type == unit_type):
@@ -156,7 +167,6 @@ class SmartAgent(base_agent.BaseAgent):
 
         else:
             return x, y
-
 
     def transform_distance(self, obs, x, x_dist, y, y_dist):
         ''' taking x and y as input, returns new coords that are of input
@@ -195,10 +205,11 @@ class SmartAgent(base_agent.BaseAgent):
         mm_loc = self.transform_distance(obs, self.player_mm_x, x_trans, self.player_mm_y, y_trans)
         return FUNCTIONS.move_camera(mm_loc)
 
-
     def step(self, obs):  # obs is the game observation -- feature maps
         super(SmartAgent, self).step(obs)
-
+        self.logger.info(f'Function types: {actions.FUNCTION_TYPES}')  # dont think particularly useful, just checking
+        self.logger.info(f'functions: {actions._FUNCTIONS}') # think this is key
+        self.logger.info(f'specific function: {actions._FUNCTIONS[1]}')
         if obs.last():
             print('last')
             reward = obs.reward
