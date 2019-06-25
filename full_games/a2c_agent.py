@@ -25,10 +25,6 @@ FunctionCall = sc2_actions.FunctionCall
 SCREEN_TYPES = [sc2_actions.TYPES[0], sc2_actions.TYPES[2]]
 MINIMAP_TYPES = [sc2_actions.TYPES[1]]
 
-tf.compat.v1.disable_v2_behavior()
-print(f'VERSION: {tf.__version__}')
-
-
 
 class a2cAgent(base_agent.BaseAgent):
     def __init__(self,
@@ -62,11 +58,11 @@ class a2cAgent(base_agent.BaseAgent):
         self.training = training
 
         if log:
-            self._init_logger(logdir)
+            self._init_logger(logdir, logdir2)
 
         self.save_path = save_dir + ckpt_name + '.ckpt'
 
-        tf.compat.v1.reset_default_graph()
+        tf.reset_default_graph()
         self.network = nets.AlphaCNN(
             screen_dims=FEATURE_SCREEN_SIZE,
             minimap_dims=FEATURE_MINIMAP_SIZE,
@@ -74,17 +70,13 @@ class a2cAgent(base_agent.BaseAgent):
             value_gradient_strength=value_gradient_strength,
             regularization_strength=regularization_strength,
             save_path=self.save_path,
-            summary_path=summary_path)
-        
+            summary_path=summary_path
+            )
         self.logger.info('Network initialization complete.')
 
-        config = tf.compat.v1.ConfigProto()
-        config.gpu_options.allow_growth = True
-
-        self.sess = tf.compat.v1.Session(config=config)
+        self.sess = tf.Session()
         if os.path.isfile(self.save_path + '.index'):
             self.network.load(self.sess)
-            self.logger.info('NETWORK RESUMED FROM LOAD')
         else:
             self._init_op()
 
@@ -144,7 +136,14 @@ class a2cAgent(base_agent.BaseAgent):
                        minimap_features,
                        flat_features,
                        available_actions):
-        ''' Sample action and args from policy '''
+        '''
+        Sample action and args from policy
+
+        Returns --
+        action_id: index of action
+        args: for spatial x,y coords; for non-spatial output from self.network.argument_policy
+        arg_types: actions.FUNCTION_TYPES[FUNCTIONS[action_id].function_type] where action id is an index
+        '''
         screen_features = np.expand_dims(screen_features, 0)
         minimap_features = np.expand_dims(minimap_features, 0)
         flat_features = np.expand_dims(flat_features, 0)
@@ -173,6 +172,7 @@ class a2cAgent(base_agent.BaseAgent):
         args = []
         for arg_type in arg_types:
             if len(arg_type.sizes) > 1:
+                self.logger.info('SPATIAL')
                 # this is a spatial action
                 # self.logger.info(f'ARGUMENT POLICY DICT: {self.network.argument_policy.keys()}')
                 # i think this stuff looks good, but
@@ -189,11 +189,17 @@ class a2cAgent(base_agent.BaseAgent):
                 args.append([x_id,y_id])
 
             else:
+                self.logger.info('NON-SPATIAL')
                 arg_policy = self.sess.run(self.network.argument_policy[str(arg_type)], feed_dict=feed_dict)
                 arg_policy = np.squeeze(arg_policy)
                 arg_ids = np.arange(len(arg_policy))
                 arg_id = np.random.choice(arg_ids, p=arg_policy)
                 args.append([arg_id])
+
+        self.logger.info(f'Action_ids: {action_id}')
+        self.logger.info(f'args: {args}')
+        self.logger.info(f'arg_types: {arg_types}\n')
+
 
         return action_id, args, arg_types
 
@@ -206,10 +212,8 @@ class a2cAgent(base_agent.BaseAgent):
         flat = [state_[2] for state_ in self.state_buffer]
 
         # actions and args. remember, last_action = [action, args, arg_types]
-        actions = [act_arg[0] for act_arg in self.action_buffer]
-        # self.logger.info(f'ACTIONS BEFORE EYE: {actions}')
-        actions = np.eye(len(FUNCTIONS))[actions]  # what exactly does this do?
-        # self.logger.info(f'ACTIONS AFTER EYE: {actions}')
+        actions = [act_arg[0] for act_arg in self.action_buffer]  # action_id, args, arg_types
+        actions = np.eye(len(FUNCTIONS))[actions]  # puts a 1 at index specified by action_id value
 
         args = [act_arg[1] for act_arg in self.action_buffer]
         arg_types = [act_arg[2] for act_arg in self.action_buffer]
@@ -223,7 +227,7 @@ class a2cAgent(base_agent.BaseAgent):
         else:
             value = np.squeeze(self.sess.run(
                 self.network.value_estimate,
-                feed_dict={self.network.screen_inputs: screen[-1:],  # why [-1:]?? whats the difference?
+                feed_dict={self.network.screen_inputs: screen[-1:],  # why [-1:]?? whats the  difference?
                            self.network.minimap_inputs: minimap[-1:],
                            self.network.flat_inputs: flat[-1:]}))
 
@@ -241,7 +245,7 @@ class a2cAgent(base_agent.BaseAgent):
 
         # add args and arg_types to feed_dict
         net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type
-        batch_size = len(arg_types)
+        batch_size = len(arg_types)  # will always be 1 per action, even for no_ops
 
         for arg_type in sc2_actions.TYPES:
             if len(arg_type.sizes) > 1:
@@ -261,6 +265,9 @@ class a2cAgent(base_agent.BaseAgent):
                 feed_dict[net_args[str(arg_type)]] = np.zeros(
                     (batch_size, arg_type.sizes[0]))
 
+        self.logger2.info(f'Net args: {net_args}\n')
+        self.logger2.info(f'Feed dict 1: {feed_dict}\n')
+
         # then one_hot encode args
         for step in range(batch_size):
             for i, arg_type in enumerate(arg_types[step]):
@@ -274,7 +281,7 @@ class a2cAgent(base_agent.BaseAgent):
                     arg_key = net_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
         # self.logger.info(f'FEED DICT KEYS: {feed_dict.keys()}')  # these are just placeholders
-        # self.logger.info(f'FEED DICT IN GET_BATCH: {feed_dict}')
+        self.logger.info(f'Feed dict final: {feed_dict}\n')
         return feed_dict  # ending feed dict will have phs with corresponding binary (?)
 
 
@@ -283,6 +290,7 @@ class a2cAgent(base_agent.BaseAgent):
         ''' trains network with feed_dict from _get_batch '''
         feed_dict = self._get_batch(terminal)  # terminal if episode end
         self.network.optimizer_op(self.sess, feed_dict)
+
         return feed_dict  # use this in handle_episode_end
 
 
@@ -291,20 +299,18 @@ class a2cAgent(base_agent.BaseAgent):
 
         # train network and increment episode
         feed_dict = self._train_network(terminal=True)
-        # self.logger.info(f'FEED DICT IN EPISODE END: {feed_dict}')
-
         self.network.increment_global_episode_op(self.sess)
         self.network.save_model(self.sess)
-        self.network.write_summary(self.sess, self.glob_episode, self.reward, feed_dict)        
-        self.logger.info('Model saved and summary written')  
+        self.network.write_summary(self.sess, feed_dict)
+        self.logger.info('Model saved and summary written')
 
 
     def _init_op(self):
-        init_op = tf.compat.v1.global_variables_initializer()
+        init_op = tf.global_variables_initializer()
         self.sess.run(init_op)
 
 
-    def _init_logger(self, dir):
+    def _init_logger(self, dir, dir2=None):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
         file_handler = logging.FileHandler(dir, mode='w')
@@ -312,5 +318,14 @@ class a2cAgent(base_agent.BaseAgent):
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
+
+        if dir2:
+            self.logger2 = logging.getLogger('second_logger')
+            self.logger2.setLevel(logging.INFO)
+            file_handler = logging.FileHandler(dir2, mode='w')
+            file_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            self.logger2.addHandler(file_handler)
 
 
