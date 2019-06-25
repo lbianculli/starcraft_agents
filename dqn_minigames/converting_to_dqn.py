@@ -1,7 +1,6 @@
-
 import numpy as np
 import tensorflow as tf
-# from a2c_agent import a2cAgent
+
 from preprocessing import preprocess_spatial_features
 from pysc2.lib import actions, features
 
@@ -113,18 +112,16 @@ class AlphaCNN():
         self.actions = tf.compat.v1.placeholder(tf.float32, [None, np.prod(self.screen_dims)], name='actions')
         self.targets = tf.compat.v1.placeholder(tf.float32, [None], name="targets")  # so features.Player is broadcast vector.
 
-        # preprocessing per rays github
         self.screen_preprocessed = preprocess_spatial_features(self.screen_inputs, screen=True)
         self.minimap_preprocessed = preprocess_spatial_features(self.minimap_inputs, screen=False)
         self.flat_preprocessed = tf.math.log(self.flat_inputs + 1., name='flat_preprocessed')
 
-        # Now onto screen and minimap. weight variables first
         screen_filters1 = tf.compat.v1.get_variable(name='screen_f1', shape=(5, 5, self.screen_preprocessed.shape[-1], 16))  # should be hwio
         screen_filters2 = tf.compat.v1.get_variable(name='screen_f2', shape=(3, 3, 16, 32))  # anything else for these?
         minimap_filters1 = tf.compat.v1.get_variable(name='minimap_f1', shape=(5, 5, self.minimap_preprocessed.shape[-1], 16))  # look back at ray's for this
         minimap_filters2 = tf.compat.v1.get_variable(name='minimap_f2', shape=(3, 3, 16, 32))
 
-        # layers next
+        # conv layers next
         screen_conv1 = tf.nn.conv2d(input=self.screen_preprocessed, filters=screen_filters1, strides=[1, 1, 1, 1], padding='SAME', name='screen_conv1_in')
         screen_conv1 = tf.nn.relu(screen_conv1, name='screen_conv1_out')
 
@@ -140,15 +137,14 @@ class AlphaCNN():
         # linear layer for non-spatial features (tanh activation)
         flat_linear = tf.compat.v1.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  # i think this is 'info'/broadcast
 
-
         # flatten layers and concat  (would not flattening and concat along axis=3 work?) NO b/c flat_linear is [None, 64]
         screen_flat = tf.compat.v1.layers.flatten(screen_conv2, name='screen_flat')
         minimap_flat = tf.compat.v1.layers.flatten(minimap_conv2, name='minimap_flat')
-        concat_layer = tf.concat([screen_flat, minimap_flat, flat_linear], axis=1, name='concat_layer')
+        concat_layer = tf.concat([screen_flat, minimap_flat, flat_linear], axis=1, name='concat_layer')  # shouldnt this be state rep
 
-        # state representation -- feel like not all this lines up with the paper how i would expect
+        # ... and this be policy over non-spatial actions? 
         self.state_representation = tf.compat.v1.layers.dense(concat_layer, 256, activation=tf.nn.relu, name='state_rep')
-        self.function_policy = tf.squeeze(tf.compat.v1.layers.dense(
+        self.function_policy = tf.squeeze(tf.compat.v1.layers.dense(  # what exactly is this -- 1x1 conv?
             inputs=self.state_representation,
             units=NUM_ACTIONS,
             activation=tf.nn.softmax,
@@ -204,7 +200,6 @@ class AlphaCNN():
         self.action_prob = tf.reduce_sum(input_tensor=self.function_policy * self.actions, axis=1, name='action_prob_ph')
         self.args_prob = 1.
 
-
         for arg_type in self.arguments:  # arg_type: placeholder where placeholder is coordinate(s)
             # this block will compute probability for each argument
             # dont totally get the ops going on here
@@ -217,28 +212,8 @@ class AlphaCNN():
 
             self.args_prob *= nonzero_probs
 
-        self.advantage = tf.subtract(
-            self.reward,
-            tf.squeeze(tf.stop_gradient(self.value_estimate)),
-            name='advantage')
-
-        # a2c gradient = policy gradient + value gradient + regularization
-        # actor is policy, critic is value function.
-        self.policy_gradient = -tf.reduce_mean(
-            input_tensor=(self.advantage * tf.math.log(self.action_prob * self.args_prob)),
-            name='policy_gradient')
-
-        self.value_gradient = -tf.reduce_mean(
-            input_tensor=self.advantage * tf.squeeze(self.value_estimate), name='value_gradient')
-
-        # only including function identifier entropy, not args
-        self.entropy = tf.reduce_sum(input_tensor=self.function_policy * tf.math.log(self.function_policy), name='entropy')
-
-        self.a2c_gradient = tf.add_n(
-            inputs=[self.policy_gradient,
-            self.value_gradient * self.value_gradient_strength,
-            self.entropy * self.regularization_strength],
-            name='a2c_gradient')
+        # think everything above can still be used? just work with value now instead of adv
+        # pre
 
         self.optimizer = tf.compat.v1.train.RMSPropOptimizer(
-            learning_rate=self.learning_rate).minimize(self.a2c_gradient, global_step=self.global_step)
+            learning_rate=self.learning_rate).minimize(self.loss, global_step=self.global_step)
