@@ -150,4 +150,4 @@ class PlayerRelativeMovementCNN():
             # optimization: MSE between state predicted Q and target Q ### *** NEED TO CLEAN THIS UP --> consolidate losses and opts
             self.prediction = tf.reduce_sum(tf.multiply(self.flat, self.actions), axis=1, name='preds')
             self.loss = huber_loss(self.targets-self.prediction)  # element wise for priority updates
-            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)  # why no minimize?
