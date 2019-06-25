@@ -1,0 +1,60 @@
+INFO - Network initialization complete.
+INFO - SPATIAL
+INFO - Action_ids: 1
+INFO - args: [[6, 14]]
+INFO - arg_types: [ArgumentType(id=1, name='minimap', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A39D8>, values=None)]
+
+INFO - SPATIAL
+INFO - Action_ids: 1
+INFO - args: [[5, 6]]
+INFO - arg_types: [ArgumentType(id=1, name='minimap', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A39D8>, values=None)]
+
+INFO - SPATIAL
+INFO - Action_ids: 1
+INFO - args: [[2, 14]]
+INFO - arg_types: [ArgumentType(id=1, name='minimap', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A39D8>, values=None)]
+
+INFO - SPATIAL
+INFO - Action_ids: 1
+INFO - args: [[23, 7]]
+INFO - arg_types: [ArgumentType(id=1, name='minimap', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A39D8>, values=None)]
+
+INFO - NON-SPATIAL
+INFO - SPATIAL
+INFO - Action_ids: 2
+INFO - args: [[3], [20, 20]]
+INFO - arg_types: [ArgumentType(id=6, name='select_point_act', sizes=(4,), fn=<function ArgumentType.enum.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3C80>, values=<enum 'SelectPointAct'>), ArgumentType(id=0, name='screen', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3950>, values=None)]
+
+INFO - SPATIAL
+INFO - Action_ids: 1
+INFO - args: [[6, 6]]
+INFO - arg_types: [ArgumentType(id=1, name='minimap', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A39D8>, values=None)]
+
+INFO - NON-SPATIAL
+INFO - SPATIAL
+INFO - Action_ids: 2
+INFO - args: [[0], [29, 1]]
+INFO - arg_types: [ArgumentType(id=6, name='select_point_act', sizes=(4,), fn=<function ArgumentType.enum.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3C80>, values=<enum 'SelectPointAct'>), ArgumentType(id=0, name='screen', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3950>, values=None)]
+
+INFO - NON-SPATIAL
+INFO - NON-SPATIAL
+INFO - Action_ids: 4
+INFO - args: [[4], [2]]
+INFO - arg_types: [ArgumentType(id=4, name='control_group_act', sizes=(5,), fn=<function ArgumentType.enum.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3B70>, values=<enum 'ControlGroupAct'>), ArgumentType(id=5, name='control_group_id', sizes=(10,), fn=<function ArgumentType.scalar.<locals>.<lambda>.<locals>.<lambda> at 0x00000173FF7A3BF8>, values=None)]
+
+INFO - NON-SPATIAL
+INFO - SPATIAL
+INFO - SPATIAL
+INFO - Action_ids: 3
+INFO - args: [[0], [26, 0], [19, 10]]
+INFO - arg_types: [ArgumentType(id=7, name='select_add', sizes=(2,), fn=<function ArgumentType.enum.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3D08>, values=<enum 'SelectAdd'>), ArgumentType(id=0, name='screen', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3950>, values=None), ArgumentType(id=2, name='screen2', sizes=(0, 0), fn=<function ArgumentType.point.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3A60>, values=None)]
+
+INFO - Action_ids: 0
+INFO - args: []
+INFO - arg_types: []
+
+INFO - NON-SPATIAL
+INFO - NON-SPATIAL
+INFO - Action_ids: 4
+INFO - args: [[4], [9]]
+INFO - arg_types: [ArgumentType(id=4, name='control_group_act', sizes=(5,), fn=<function ArgumentType.enum.<locals>.factory.<locals>.<lambda> at 0x00000173FF7A3B70>, values=<enum 'ControlGroupAct'>), ArgumentType(id=5, name='control_group_id', sizes=(10,), fn=<function ArgumentType.scalar.<locals>.<lambda>.<locals>.<lambda> at 0x00000173FF7A3BF8>, values=None)]
