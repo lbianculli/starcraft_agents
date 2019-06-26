@@ -1,3 +1,53 @@
+import numpy as np
+import tensorflow as tf
+from preprocessing import preprocess_spatial_features
+from pysc2.lib import actions, features
+
+SCREEN_FEATURES = features.SCREEN_FEATURES
+MINIMAP_FEATURES = features.MINIMAP_FEATURES
+SCREEN_DIMS = [32, 32]
+MINIMAP_DIMS = [32, 32]
+NUM_ACTIONS = len(actions.FUNCTIONS)  # so num_actions is total possible actions
+
+# manually state the argument types which take points on screen/minimap
+SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]  # [a point on the screen, second point for a rectangle]
+MINIMAP_TYPES = [actions.TYPES[1]]  # [point on the minimap]
+
+class AlphaCNN():
+    def __init__(self,
+                 screen_dims=SCREEN_DIMS,
+                 minimap_dims=MINIMAP_DIMS,
+                 learning_rate=1e-4,
+                 value_gradient_strength=.1,  # check these
+                 regularization_strength=.05,
+                 screen_features=17,  # obs.observation.feature_screen?
+                 minimap_features=7,  # obs.observation.feature_minimap? do i need this here? dont think so
+                 save_path=None,
+                 summary_path=None,
+                 name='full_game_CNN'):
+
+    # input
+        tf.reset_default_graph()
+        self.screen_dims = screen_dims
+        self.minimap_dims = minimap_dims
+        self.learning_rate = learning_rate
+        self.value_gradient_strength = value_gradient_strength
+        self.regularization_strength = regularization_strength
+        self.screen_features = screen_features
+        self.minimap_features = minimap_features
+        self.save_path = save_path
+        self.summary_path = summary_path
+
+        with tf.variable_scope(name):
+            self._build()
+            self._build_optimization()
+
+        # setup model saver
+        if self.save_path:
+            self.saver = tf.train.Saver()
+            self.write_op = tf.summary.merge_all()
+
+
     def save_model(self, sess):
         """Write tensorflow ckpt."""
         self.saver.save(sess, self.save_path)
@@ -81,7 +131,6 @@
         # linear layer for non-spatial features (tanh activation)
         flat_linear = tf.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  # i think this is 'info'/broadcast
 
-
         # flatten layers and concat  (would not flattening and concat along axis=3 work?) NO b/c flat_linear is [None, 64]
         screen_flat = tf.layers.flatten(screen_conv2, name='screen_flat')
         minimap_flat = tf.layers.flatten(minimap_conv2, name='minimap_flat')
@@ -135,19 +184,13 @@
         # dont think i should need any of the probability stuff, just taking an arg max
         self.actions = tf.placeholder(tf.float32, shape=(None, NUM_ACTIONS), name='actions_ph')
         self.reward = tf.placeholder(tf.float32, shape=(None), name='reward_ph')
-        self.targets = tf.placeholder(tf.float32, [None], name='targets')  #*** features.Player is 'broadcast vector'.
+        self.target_q = tf.placeholder(tf.float32, [None], name='targets')  #*** features.Player is 'broadcast vector'.
 
 
         self.pred_q_action = tf.reduce_sum(self.pred_q * tf.one_hot(self.actions, depth=NUM_ACTIONS), axis=1)  # act_t_ph?
-        self.target_q =
-        self.target_q_action =  # think these will be phs and get fed in agent
+         # would this be better off in agent and ph here?
+        self.target_q_action = self.reward + (1-self.done_mask) * self.gamma *tf.reduce_max(target_q, axis=1)
         self.loss = huber_loss(self.targets-self.prediction)
 
         self.optimizer = tf.train.RMSPropOptimizer(
             learning_rate=self.learning_rate).minimize(self.loss, global_step=self.global_step)
-
-
-# net = AlphaCNN(
-#     screen_dims=[32, 32],
-#     minimap_dims=[32, 32],
-#     learning_rate=1e-4)
