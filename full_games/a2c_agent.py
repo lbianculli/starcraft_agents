@@ -247,6 +247,7 @@ class a2cAgent(base_agent.BaseAgent):
         net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type
         batch_size = len(arg_types)  # will always be 1 per action, even for no_ops
 
+        # this feed duct sets up the 0s matrix for masking
         for arg_type in sc2_actions.TYPES:
             if len(arg_type.sizes) > 1:
                 if arg_type in SCREEN_TYPES:
@@ -269,6 +270,7 @@ class a2cAgent(base_agent.BaseAgent):
         self.logger2.info(f'Feed dict 1: {feed_dict}\n')
 
         # then one_hot encode args
+        # this feed dict “picks” the right coords/args for each action
         for step in range(batch_size):
             for i, arg_type in enumerate(arg_types[step]):
                 if len(arg_type.sizes) > 1:
