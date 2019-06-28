@@ -112,7 +112,6 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
 
 
     def reset(self):
-        # reset isnt currently running.
         self.episodes += 1
         self.steps = 0
         self.reward = 0
@@ -137,7 +136,7 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         observation = obs.observation
         screen_features = observation.feature_screen
         minimap_features = observation.feature_minimap
-        flat_features = observation.player  # makes sense
+        flat_features = observation.player  
         available_actions = observation.available_actions
 
         # sample action (function ID, args, arg_types) from policy
@@ -162,28 +161,19 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         return FunctionCall(action_id, args)
 
 
-    def _epsilon_greedy_action(self, state, available_actions, epsilon=1.0):
-        ### how to coordinate w/in if so i can use cleanly above? ###
+    def _epsilon_greedy_action(self, state, available_actions, q_values, epsilon=1.0):
         ''' Choose an action from the state with eps greedy '''
         self.total_steps = int(self.steps + self.initial_step)  # agent step differs from game step due to step mul.
         fraction = min(float(self.total_steps) / self.epsilon_decay_steps, 1.0)
         new_epsilon = epsilon + fraction * (self.epsilon_min - self.epsilon_max)
-        self.epsilons.append(new_epsilon)  # for logging/loading
+        self.epsilons.append(new_epsilon)  
 
-        if new_epsilon > np.random.rand():  # chooses random action
+        if new_epsilon > np.random.rand(): 
             action_id = np.random.choice(available_actions)
-            # x = np.random.randint(0, FEATURE_SCREEN_SIZE[0])
-            # y = np.random.randint(0, FEATURE_SCREEN_SIZE[1])
-
-            return action_id
-
-        else:  # smthn like this. not important until the rest works anyway
-            inputs = np.expand_dims(state, 0)  # state = obs (from above)  (???)  # below: flat is output in old code
-            q_values = self.sess.run(self.online_network.flat_inputs, feed_dict={self.online_network.inputs:inputs})  # flatten for unravel
-            action_id = tf.argmax(q_values)  # best bet might be changing this? has to be an easier way
-            # x, y = np.unravel_index(best_action, FEATURE_SCREEN_SIZE)  # not entirely sure why this is best, complicated
-
-            return action_id
+        else:  
+            action_id = tf.argmax(q_values)  # how about this? just need to argmax -- https://github.com/ageron/tiny-dqn/blob/master/tiny_dqn.py
+            
+        return action_id
 
 
     def _sample_action(self,
@@ -213,18 +203,12 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
         self.online_network.flat_inputs: flat_features}
 
         ### ---/ From here on out is the tricky part /--- ###
-        # definitely need to use something similar to below to account for random actions
 
         network_pred_q = self.sess.run(self.online_network.pred_q, feed_dict=feed_dict)
         network_pred_q *= action_mask
         function_ids = np.arange(len(network_pred_q))
-
-        # renormalize distribution over function identifiers
-        # function_id_policy /= np.sum(function_id_policy)
-
-        # sample function identifier  -- below will pick random. need to incorporate eps greedy as well
-        action_id = self._epsilon_greedy_action(obs, available_actions)  # not even sure about other args
-        # action_id = np.random.choice(function_ids, p=np.squeeze(function_id_policy))  # why do i need to squeeze here?
+       
+        action_id = self._epsilon_greedy_action(obs, available_actions, network_pred_q)  # is this the correct spot?
 
         # sample function arguments:
         arg_types = FUNCTION_TYPES[FUNCTIONS[action_id].function_type]
@@ -284,25 +268,21 @@ class DQNMoveOnlyAgent(base_agent.BaseAgent):
             value = 0 # dont think i still need
             done_mask = 1
         else:
-            value = np.squeeze(self.sess.run(
-                self.online_network.pred_q,
-                feed_dict={self.online_network.screen_inputs: screen[-1:],  # why [-1:]?? whats the  difference?
-                           self.online_network.minimap_inputs: minimap[-1:],
-                           self.online_network.flat_inputs: flat[-1:]}))
-
-        # self.target_q_action = self.reward + (1-self.done_mask) * self.gamma *tf.reduce_max(target_q, axis=1)  # ***
-
+            value = np.squeeze(self.sess.run(self.online_network.pred_q,
+                                             feed_dict={self.online_network.screen_inputs: screen[-1:],  # why [-1:]?
+                                                        self.online_network.minimap_inputs: minimap[-1:],
+                                                        self.online_network.flat_inputs: flat[-1:]}))
         upd_rewards = []
-        # n-step discounted rewards from 1 < n < trajectory_training_steps. *** feel like this isnt right, needs exp(i)?
-        for i, reward in enumerate(raw_rewards):
-            value = reward + self.gamma * value  # this differs from above
+        # compute updated rewards so we can feed as target (y)
+        for i, reward in enumerate(raw_rewards):  # exp?
+            value = reward + self.gamma * reward  # this differs from above
             upd_rewards.append(value)
 
         feed_dict = {self.online_network.screen_inputs: screen,
                      self.online_network.minimap_inputs: minimap,
                      self.online_network.flat_inputs: flat,
                      self.online_network.actions: actions,
-                     self.online_network.reward: upd_rewards}
+                     self.online_network.y: upd_rewards}
 
         # add args and arg_types to feed_dict
         net_args = self.online_network.arguments  #  dict of phs of shape [None, px], keyed by arg_type  (check)
