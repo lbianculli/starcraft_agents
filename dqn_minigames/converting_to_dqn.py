@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 from preprocessing import preprocess_spatial_features
 from pysc2.lib import actions, features
+from dqn_utils import huber_loss
 
 SCREEN_FEATURES = features.SCREEN_FEATURES
 MINIMAP_FEATURES = features.MINIMAP_FEATURES
@@ -12,6 +13,7 @@ NUM_ACTIONS = len(actions.FUNCTIONS)  # so num_actions is total possible actions
 # manually state the argument types which take points on screen/minimap
 SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]  # [a point on the screen, second point for a rectangle]
 MINIMAP_TYPES = [actions.TYPES[1]]  # [point on the minimap]
+
 
 class AlphaCNN():
     def __init__(self,
@@ -137,12 +139,14 @@ class AlphaCNN():
         concat_layer = tf.concat([screen_flat, minimap_flat, flat_linear], axis=1, name='concat_layer')
 
         # state representation -- feel like not all this lines up with the paper how i would expect
+        ### ------/ HERE /------ ###
         self.state_representation = tf.layers.dense(concat_layer, 256, activation=tf.nn.relu, name='state_rep')
-        self.pred_q = tf.dense(  # diff between tf.dense and .fully_connected?
+        self.pred_q = tf.layers.dense(  # diff between tf.dense and .fully_connected?
             inputs=self.state_representation,
             units=NUM_ACTIONS,
             name='q_pred')
-        self.pred_action = tf.argmax(self.pred_q, axis=1)
+        # self.pred_action = tf.argmax(self.pred_q, axis=1)  # dont think so
+        # self.flat = tf.layers.flatten(self.pred_q, name='flat')  # IDK
 
         # spatial vs. non spatial starts down here
         # action function argument policies (nonspatial)
@@ -178,19 +182,19 @@ class AlphaCNN():
                 self.arguments[str(arg_type)] = arg_ph
 
 
-
-    def _build_optimization(self):  # "params learnt with A3C" (using A2C here)
+    def _build_optimization(self):
         ''' construct a graph for network updates '''
         # dont think i should need any of the probability stuff, just taking an arg max
-        self.actions = tf.placeholder(tf.float32, shape=(None, NUM_ACTIONS), name='actions_ph')
-        self.reward = tf.placeholder(tf.float32, shape=(None), name='reward_ph')
-        self.target_q = tf.placeholder(tf.float32, [None], name='targets')  #*** features.Player is 'broadcast vector'.
+        # *** log this stuff later so i get how it works
+        self.actions = tf.placeholder(tf.int32, shape=(None, NUM_ACTIONS), name='actions_ph')
+        self.reward = tf.placeholder(tf.float32, shape=[None], name='reward_ph')
+        self.target_q = tf.placeholder(tf.float32, [None], name='target_q')  #*** features.Player is 'broadcast vector'.
+        self.pred_q_a = tf.reduce_sum(self.pred_q * tf.one_hot(self.actions, depth=NUM_ACTIONS), axis=1)  # why is reduce_sum needed?
 
-
-        self.pred_q_action = tf.reduce_sum(self.pred_q * tf.one_hot(self.actions, depth=NUM_ACTIONS), axis=1)  # act_t_ph?
+        # self.pred_q_action = tf.reduce_sum(self.pred_q * tf.one_hot(self.actions, depth=NUM_ACTIONS), axis=1)  # act_t_ph?
          # would this be better off in agent and ph here?
-        self.target_q_action = self.reward + (1-self.done_mask) * self.gamma *tf.reduce_max(target_q, axis=1)
-        self.loss = huber_loss(self.targets-self.prediction)
+        # i am more inclined to believe the self.actions is correct. also do i want to reduce_sum. check hw (dqn.py)
+        self.loss = huber_loss(self.pred_q_a-self.reward)
 
         self.optimizer = tf.train.RMSPropOptimizer(
             learning_rate=self.learning_rate).minimize(self.loss, global_step=self.global_step)
