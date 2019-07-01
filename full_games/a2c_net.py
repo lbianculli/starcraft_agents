@@ -140,7 +140,7 @@ class AlphaCNN():
 
         # state representation -- feel like not all this lines up with the paper how i would expect
         self.state_representation = tf.layers.dense(concat_layer, 256, activation=tf.nn.relu, name='state_rep')
-        self.function_policy = tf.squeeze(tf.layers.dense(  # think i can keep this same (???). Just dont understnd why paper uses a2c
+        self.policy = tf.squeeze(tf.layers.dense(  # think i can keep this same (???). Just dont understnd why paper uses a2c
             inputs=self.state_representation,
             units=NUM_ACTIONS,
             activation=tf.nn.softmax,
@@ -160,6 +160,7 @@ class AlphaCNN():
                 elif arg_type in MINIMAP_TYPES:
                     units = self.minimap_dims  # so these will be [n, n]
 
+                # get x, y probs
                 arg_policy_x = tf.layers.dense(self.state_representation, units=units[0], activation=tf.nn.softmax)
                 arg_policy_y = tf.layers.dense(self.state_representation, units=units[1], activation=tf.nn.softmax)
 
@@ -179,28 +180,16 @@ class AlphaCNN():
                 arg_ph = tf.placeholder(tf.float32, [None, arg_type.sizes[0]])
                 self.arguments[str(arg_type)] = arg_ph
 
-        # value estimation
-        self.value_estimate = tf.layers.dense(
-            self.state_representation,
-            units=1,
-            activation=None,
-            name='value_estimate')
 
-
-    def _build_optimization(self):  # "params learnt with A3C" (using A2C here)
+    def _build_optimization(self):  # "params learnt with AC"
         ''' construct a graph for network updates '''
-        # placeholders
         self.actions = tf.placeholder(tf.float32, shape=(None, NUM_ACTIONS), name='actions_ph')
-        self.reward = tf.placeholder(tf.float32, shape=(None), name='reward_ph')
+        self.reward = tf.placeholder(tf.float32, shape=(None), name='reward_ph')  # actual reward
 
-        # compute advantage -- this is only thing i dont understand how to reconcile. starts w/ function_policy
-        self.action_prob = tf.reduce_sum(self.function_policy * self.actions, axis=1, name='action_prob_ph')
+        self.action_prob = tf.reduce_sum(self.policy * self.actions, axis=1, name='action_prob_ph')
         self.args_prob = 1.
-
-
         for arg_type in self.arguments:  # arg_type: placeholder where placeholder is coordinate(s)
             # this block will compute probability for each argument
-            # dont totally get the ops going on here
             arg_probability = tf.reduce_sum(self.arguments[arg_type] * self.argument_policy[arg_type])
 
             nonzero_probs = tf.cond(
@@ -209,28 +198,34 @@ class AlphaCNN():
                 false_fn=lambda: 1.)
 
             self.args_prob *= nonzero_probs
+            
+        self.value_estimate = tf.layers.dense(
+            self.state_representation,
+            units=1,
+            activation=None,
+            name='value_estimate')
 
         self.advantage = tf.subtract(
             self.reward,
             tf.squeeze(tf.stop_gradient(self.value_estimate)),
             name='advantage')
 
-        # a2c gradient = policy gradient + value gradient + regularization
-        self.policy_gradient = -tf.reduce_mean(  # why are the following two grads negative?
+        # ac gradient = policy gradient + value gradient + regularization
+        self.policy_loss = -tf.reduce_mean( 
             (self.advantage * tf.log(self.action_prob * self.args_prob)),
-            name='policy_gradient')
+            name='policy_loss')
 
-        self.value_gradient = -tf.reduce_mean(
-            self.advantage * tf.squeeze(self.value_estimate), name='value_gradient')
+        self.value_loss = -tf.reduce_mean(
+            self.advantage * tf.squeeze(self.value_estimate), name='value_loss')
 
         # only including function identifier entropy, not args
-        self.entropy = tf.reduce_sum(self.function_policy * tf.log(self.function_policy), name='entropy')
+        self.entropy = tf.reduce_sum(self.policy * tf.log(self.policy), name='entropy')
 
-        self.a2c_gradient = tf.add_n(
-            inputs=[self.policy_gradient,
-            self.value_gradient * self.value_gradient_strength,
+        self.total_loss = tf.add_n(
+            inputs=[self.policy_loss,
+            self.value_loss * self.value_gradient_strength,
             self.entropy * self.regularization_strength],
-            name='a2c_gradient')
+            name='total_loss')
 
         self.optimizer = tf.train.RMSPropOptimizer(
-            learning_rate=self.learning_rate).minimize(self.a2c_gradient, global_step=self.global_step)
+            learning_rate=self.learning_rate, epsilon=1e-10).minimize(self.total_loss, global_step=self.global_step)
