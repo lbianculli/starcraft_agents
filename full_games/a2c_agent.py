@@ -231,20 +231,21 @@ class a2cAgent(base_agent.BaseAgent):
                            self.network.minimap_inputs: minimap[-1:],
                            self.network.flat_inputs: flat[-1:]}))
 
-        upd_rewards = []
+        discounted_rewards = []
         # n-step discounted rewards from 1 < n < trajectory_training_steps. *** feel like this isnt right, needs exp(i)?
-        for i, reward in enumerate(raw_rewards):
-            value = reward + self.gamma * value
-            upd_rewards.append(value)
+        for reward in list(raw_rewards)[::-1]:  # reverse buffer r
+            reward_sum = reward + gamma * value  # 'value' instead of rewar_sum
+            discounted_rewards.append(value)
+        discounted_rewards.reverse()  
 
         feed_dict = {self.network.screen_inputs: screen,
                      self.network.minimap_inputs: minimap,
                      self.network.flat_inputs: flat,
                      self.network.actions: actions,
-                     self.network.reward: upd_rewards}
+                     self.network.reward: discounted_rewards}
 
         # add args and arg_types to feed_dict
-        net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type  (check)
+        network_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type  (check)
         batch_size = len(arg_types)  # will always be 1 per action, even for no_ops
 
         for arg_type in sc2_actions.TYPES:
@@ -256,16 +257,15 @@ class a2cAgent(base_agent.BaseAgent):
                     x_size = FEATURE_MINIMAP_SIZE[0]
                     y_size = FEATURE_MINIMAP_SIZE[1] # minimap pixles (y)
 
-                feed_dict[net_args[str(arg_type) + "x"]] = np.zeros(
+                feed_dict[network_args[str(arg_type) + "x"]] = np.zeros(
                     (batch_size, x_size))
-                feed_dict[net_args[str(arg_type) + "y"]] = np.zeros(
+                feed_dict[network_args[str(arg_type) + "y"]] = np.zeros(
                     (batch_size, y_size))
-
             else:
-                feed_dict[net_args[str(arg_type)]] = np.zeros(
+                feed_dict[network_args[str(arg_type)]] = np.zeros(
                     (batch_size, arg_type.sizes[0]))
 
-        self.logger2.info(f'Net args: {net_args}\n')  # matches above - [None, px] ph
+        self.logger2.info(f'Net args: {network_args}\n')  # matches above - [None, px] ph
         self.logger2.info(f'Feed dict 1 keys length: {len(feed_dict.keys())}\n')
         self.logger2.info(f'Feed dict 1: {feed_dict}\n')  # [None, 17, 32, 32] array -- full_game_CNN/screen_inputs
 
@@ -273,17 +273,17 @@ class a2cAgent(base_agent.BaseAgent):
         for step in range(batch_size):
             for i, arg_type in enumerate(arg_types[step]):
                 if len(arg_type.sizes) > 1:
-                    arg_key_x = net_args[str(arg_type) + "x"]  # get the VALUE of net_args for this arg
-                    feed_dict[arg_key_x][step, args[step][i][0]] = 1  # haha this is rough... why step? temporal dimension?
+                    arg_key_x = network_args[str(arg_type) + "x"]  
+                    feed_dict[arg_key_x][step, args[step][i][0]] = 1  # this is rough
 
-                    arg_key_y = net_args[str(arg_type) + "x"]
+                    arg_key_y = network_args[str(arg_type) + "x"]
                     feed_dict[arg_key_y][step, args[step][i][1]] = 1
                 else:
-                    arg_key = net_args[str(arg_type)]
+                    arg_key = network_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
         self.logger.info(f'Feed dict final keys length: {len(feed_dict.keys())}\n')  #
         self.logger.info(f'Feed dict final: {feed_dict}\n')
-        return feed_dict  # ending feed dict will have phs with corresponding binary (?)
+        return feed_dict  # ending feed dict will have phs with corresponding intersection
 
 
 
@@ -291,8 +291,6 @@ class a2cAgent(base_agent.BaseAgent):
         ''' trains network with feed_dict from _get_batch '''
         feed_dict = self._get_batch(terminal)  # terminal if episode end
         self.network.optimizer_op(self.sess, feed_dict)
-        # realistically dont see why i cant just replace a2c code in a2c_net with dqn code...
-        # if i am understanding this correctly
 
         return feed_dict
 
