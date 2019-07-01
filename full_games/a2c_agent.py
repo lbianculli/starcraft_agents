@@ -39,6 +39,7 @@ class a2cAgent(base_agent.BaseAgent):
                  ckpt_name='collect_minerals_5-09',
                  summary_path='/home/lbianculli/sc_bot/full_games/logs/',
                  logdir='/home/lbianculli/sc_bot/full_games/logs/variable_logs/',
+                 logdir2='/home/lbianculli/sc_bot/full_games/logs/variable_logs2/',
                  log=True):
         super(a2cAgent, self).__init__()  # what does this do again?
 
@@ -166,7 +167,6 @@ class a2cAgent(base_agent.BaseAgent):
 
         # sample function identifier
         action_id = np.random.choice(function_ids, p=np.squeeze(function_id_policy))  # why do i need to squeeze here?
-
         # sample function arguments:
         arg_types = FUNCTION_TYPES[FUNCTIONS[action_id].function_type]
         args = []
@@ -225,30 +225,28 @@ class a2cAgent(base_agent.BaseAgent):
         if terminal:
             value = 0
         else:
-            value = np.squeeze(self.sess.run(  # why squeeze? shouldnt need to i would think
+            value = np.squeeze(self.sess.run(
                 self.network.value_estimate,
-                feed_dict={self.network.screen_inputs: screen[-1:],  # why [-1:]?
+                feed_dict={self.network.screen_inputs: screen[-1:],  # why [-1:]?? whats the  difference?
                            self.network.minimap_inputs: minimap[-1:],
                            self.network.flat_inputs: flat[-1:]}))
 
-        discounted_rewards = []
-
-        for reward in raw_rewards[::-1]:  # reverse buffer r
-            reward_sum = reward + gamma * value  # value instead of reward_sum
-            discounted_rewards.append(value)
-        discounted_rewards.reverse()      
+        upd_rewards = []
+        # n-step discounted rewards from 1 < n < trajectory_training_steps. *** feel like this isnt right, needs exp(i)?
+        for i, reward in enumerate(raw_rewards):
+            value = reward + self.gamma * value
+            upd_rewards.append(value)
 
         feed_dict = {self.network.screen_inputs: screen,
                      self.network.minimap_inputs: minimap,
                      self.network.flat_inputs: flat,
                      self.network.actions: actions,
-                     self.network.reward: discounted_rewards}
+                     self.network.reward: upd_rewards}
 
         # add args and arg_types to feed_dict
-        net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type
+        net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type  (check)
         batch_size = len(arg_types)  # will always be 1 per action, even for no_ops
 
-        # this feed duct sets up the 0s matrix for masking
         for arg_type in sc2_actions.TYPES:
             if len(arg_type.sizes) > 1:
                 if arg_type in SCREEN_TYPES:
@@ -267,23 +265,23 @@ class a2cAgent(base_agent.BaseAgent):
                 feed_dict[net_args[str(arg_type)]] = np.zeros(
                     (batch_size, arg_type.sizes[0]))
 
-        self.logger2.info(f'Net args: {net_args}\n')
-        self.logger2.info(f'Feed dict 1: {feed_dict}\n')
+        self.logger2.info(f'Net args: {net_args}\n')  # matches above - [None, px] ph
+        self.logger2.info(f'Feed dict 1 keys length: {len(feed_dict.keys())}\n')
+        self.logger2.info(f'Feed dict 1: {feed_dict}\n')  # [None, 17, 32, 32] array -- full_game_CNN/screen_inputs
 
         # then one_hot encode args
-        # this feed dict “picks” the right coords/args for each action
         for step in range(batch_size):
             for i, arg_type in enumerate(arg_types[step]):
                 if len(arg_type.sizes) > 1:
-                    arg_key_x = net_args[str(arg_type) + "x"]
-                    feed_dict[arg_key_x][step, args[step][i][0]] = 1
+                    arg_key_x = net_args[str(arg_type) + "x"]  # get the VALUE of net_args for this arg
+                    feed_dict[arg_key_x][step, args[step][i][0]] = 1  # haha this is rough... why step? temporal dimension?
 
                     arg_key_y = net_args[str(arg_type) + "x"]
                     feed_dict[arg_key_y][step, args[step][i][1]] = 1
                 else:
                     arg_key = net_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
-        # self.logger.info(f'FEED DICT KEYS: {feed_dict.keys()}')  # these are just placeholders
+        self.logger.info(f'Feed dict final keys length: {len(feed_dict.keys())}\n')  #
         self.logger.info(f'Feed dict final: {feed_dict}\n')
         return feed_dict  # ending feed dict will have phs with corresponding binary (?)
 
@@ -293,15 +291,17 @@ class a2cAgent(base_agent.BaseAgent):
         ''' trains network with feed_dict from _get_batch '''
         feed_dict = self._get_batch(terminal)  # terminal if episode end
         self.network.optimizer_op(self.sess, feed_dict)
+        # realistically dont see why i cant just replace a2c code in a2c_net with dqn code...
+        # if i am understanding this correctly
 
-        return feed_dict  # use this in handle_episode_end
+        return feed_dict
 
 
     def _handle_episode_end(self):
         ''' save weights and write summaries '''
 
         # train network and increment episode
-        feed_dict = self._train_network(terminal=True)
+        feed_dict = self._train_network(terminal=True)  # should i be using this for something ****
         self.network.increment_global_episode_op(self.sess)
         self.network.save_model(self.sess)
         self.network.write_summary(self.sess, feed_dict)
@@ -330,5 +330,7 @@ class a2cAgent(base_agent.BaseAgent):
             formatter = logging.Formatter('%(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             self.logger2.addHandler(file_handler)
+
+
 
 
