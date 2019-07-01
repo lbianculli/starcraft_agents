@@ -220,24 +220,24 @@ class AlphaCNN():
 
         # a2c gradient = policy gradient + value gradient + regularization
         # actor is policy, critic is value function.
-        self.policy_gradient = -tf.reduce_mean(
+        self.policy_loss = -tf.reduce_mean(
             input_tensor=(self.advantage * tf.math.log(self.action_prob * self.args_prob)),
-            name='policy_gradient')
+            name='policy_loss')
 
-        self.value_gradient = -tf.reduce_mean(
-            input_tensor=self.advantage * tf.squeeze(self.value_estimate), name='value_gradient')
+        self.value_loss = -tf.reduce_mean(
+            input_tensor=self.advantage * tf.squeeze(self.value_estimate), name='value_loss')
 
         # only including function identifier entropy, not args
         self.entropy = tf.reduce_sum(
             input_tensor=self.policy * tf.math.log(self.policy + 1e-20), name='entropy')
 
-        self.a2c_gradient = tf.add_n(
-            inputs=[self.policy_gradient,
-            self.value_gradient * self.value_gradient_strength,
+        self.total_loss = tf.add_n(
+            inputs=[self.policy_loss,
+            self.value_loss * self.value_gradient_strength,
             self.entropy * self.regularization_strength],
-            name='a2c_gradient')
+            name='total_gradient')
 
         self.optimizer = tf.compat.v1.train.RMSPropOptimizer(
-            learning_rate=self.learning_rate).minimize(self.a2c_gradient, global_step=self.global_step)
+            learning_rate=self.learning_rate, epsilon=1e-10).minimize(self.total_loss, global_step=self.global_step)
 
 
