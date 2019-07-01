@@ -4,6 +4,7 @@ import tensorflow as tf
 from preprocessing import preprocess_spatial_features
 from pysc2.lib import actions, features
 
+
 SCREEN_FEATURES = features.SCREEN_FEATURES
 MINIMAP_FEATURES = features.MINIMAP_FEATURES
 SCREEN_DIMS = [32, 32]
@@ -15,16 +16,13 @@ SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]  # [a point on the screen, s
 MINIMAP_TYPES = [actions.TYPES[1]]  # [point on the minimap]
 
 
-# tf.compat.v1.disable_v2_behavior()
-
-
 class AlphaCNN():
     def __init__(self,
                  screen_dims=SCREEN_DIMS,
                  minimap_dims=MINIMAP_DIMS,
                  learning_rate=1e-4,
-                 value_gradient_strength=.1,  # check these
-                 regularization_strength=.05,
+                 value_gradient_strength=.5,  # check these
+                 regularization_strength=.01,
                  screen_features=17,  # obs.observation.feature_screen?
                  minimap_features=7,  # obs.observation.feature_minimap? do i need this here? dont think so
                  save_path=None,
@@ -147,7 +145,7 @@ class AlphaCNN():
 
         # state representation -- feel like not all this lines up with the paper how i would expect
         self.state_representation = tf.compat.v1.layers.dense(concat_layer, 256, activation=tf.nn.relu, name='state_rep')
-        self.function_policy = tf.squeeze(tf.compat.v1.layers.dense(
+        self.policy = tf.squeeze(tf.compat.v1.layers.dense(
             inputs=self.state_representation,
             units=NUM_ACTIONS,
             activation=tf.nn.softmax,
@@ -193,16 +191,15 @@ class AlphaCNN():
             name='value_estimate')
 
 
-    def _build_optimization(self):  # "params learnt with A3C" (using A2C here)
+    def _build_optimization(self):  # "params learnt with AC" 
         ''' construct a graph for network updates '''
         # placeholders
         self.actions = tf.compat.v1.placeholder(tf.float32, shape=(None, NUM_ACTIONS), name='actions_ph')
         self.reward = tf.compat.v1.placeholder(tf.float32, shape=(None), name='reward_ph')
 
         # compute advantage
-        self.action_prob = tf.reduce_sum(input_tensor=self.function_policy * self.actions, axis=1, name='action_prob_ph')
+        self.action_prob = tf.reduce_sum(input_tensor=self.policy * self.actions, axis=1, name='action_prob_ph')
         self.args_prob = 1.
-
 
         for arg_type in self.arguments:  # arg_type: placeholder where placeholder is coordinate(s)
             # this block will compute probability for each argument
@@ -231,7 +228,8 @@ class AlphaCNN():
             input_tensor=self.advantage * tf.squeeze(self.value_estimate), name='value_gradient')
 
         # only including function identifier entropy, not args
-        self.entropy = tf.reduce_sum(input_tensor=self.function_policy * tf.math.log(self.function_policy), name='entropy')
+        self.entropy = tf.reduce_sum(
+            input_tensor=self.policy * tf.math.log(self.policy + 1e-20), name='entropy')
 
         self.a2c_gradient = tf.add_n(
             inputs=[self.policy_gradient,
