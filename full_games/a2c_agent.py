@@ -225,23 +225,24 @@ class a2cAgent(base_agent.BaseAgent):
         if terminal:
             value = 0
         else:
-            value = np.squeeze(self.sess.run(
+            value = np.squeeze(self.sess.run(  # why squeeze? shouldnt need to i would think
                 self.network.value_estimate,
-                feed_dict={self.network.screen_inputs: screen[-1:],  # why [-1:]?? whats the  difference?
+                feed_dict={self.network.screen_inputs: screen[-1:],  # why [-1:]?
                            self.network.minimap_inputs: minimap[-1:],
                            self.network.flat_inputs: flat[-1:]}))
 
-        upd_rewards = []
-        # n-step discounted rewards from 1 < n < trajectory_training_steps. *** feel like this isnt right, needs exp(i)?
-        for i, reward in enumerate(raw_rewards):
-            value = reward + self.gamma * value
-            upd_rewards.append(value)
+        discounted_rewards = []
+
+        for reward in raw_rewards[::-1]:  # reverse buffer r
+            reward_sum = reward + gamma * value  # value instead of reward_sum
+            discounted_rewards.append(value)
+        discounted_rewards.reverse()      
 
         feed_dict = {self.network.screen_inputs: screen,
                      self.network.minimap_inputs: minimap,
                      self.network.flat_inputs: flat,
                      self.network.actions: actions,
-                     self.network.reward: upd_rewards}
+                     self.network.reward: discounted_rewards}
 
         # add args and arg_types to feed_dict
         net_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type
