@@ -13,7 +13,6 @@ NUM_ACTIONS = len(actions.FUNCTIONS)  # so num_actions is total possible actions
 SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]  # [a point on the screen, second point for a rectangle]
 MINIMAP_TYPES = [actions.TYPES[1]]  # [point on the minimap]
 
-
 class AlphaCNN():
     def __init__(self,
                  screen_dims=SCREEN_DIMS,
@@ -44,9 +43,17 @@ class AlphaCNN():
             self._build_optimization()
 
         # setup model saver
+        if self.summary_path:
+            self.writer = tf.summary.FileWriter(summary_path)
+            tf.summary.scalar("Score", self.score)
+            tf.summary.scalar("Policy_Loss", self.policy_loss)
+            tf.summary.scalar("Value_Loss", self.value_loss)
+            tf.summary.scalar("Entropy", self.entropy)
+            tf.summary.scalar("A2C_Loss", self.total_loss)
+            self.write_op = tf.summary.merge_all()
+
         if self.save_path:
             self.saver = tf.train.Saver()
-            self.write_op = tf.summary.merge_all()
 
 
     def save_model(self, sess):
@@ -54,15 +61,15 @@ class AlphaCNN():
         self.saver.save(sess, self.save_path)
 
 
-    def write_summary(self, sess, feed_dict):
-        ''' Write session summary to TensorBoard '''
-        global_episode = self.global_episode.eval(sess)  # what is global_episode at runtime? -- variable with shape 0
-        summary = sess.run(self.write_op,
-                           feed_dict=feed_dict)
+    def write_summary(self, sess, global_episode, score, feed_dict):
+        """Write summary to Tensorboard."""
+        feed_dict[self.score] = score
 
+        summary = sess.run(
+            self.write_op,
+            feed_dict=feed_dict)
         self.writer.add_summary(summary, global_episode - 1)
-        self.writer.flush()
-
+        self.writer.flush
 
     def load(self, sess):
         """Restore from ckpt."""
@@ -81,6 +88,7 @@ class AlphaCNN():
 
     def _build(self):
         ''' Create network architecture for agent '''
+
         self.global_step = tf.Variable(
             0,
             trainable=False,
@@ -97,13 +105,13 @@ class AlphaCNN():
             name='increment_global_episode')
 
         self.score = tf.placeholder(tf.int32, [], name='score')
-        self.screen_inputs = tf.placeholder(tf.int32, shape=[None, len(SCREEN_FEATURES), *self.screen_dims], name='screen_inputs')  # 17, 32, 32
+        self.screen_inputs = tf.placeholder(tf.int32, shape=[None, len(SCREEN_FEATURES), *self.screen_dims], name='screen_inputs')
         self.minimap_inputs = tf.placeholder(tf.int32, shape=[None, len(MINIMAP_FEATURES), *self.minimap_dims], name='minimap_inputs')
         self.flat_inputs = tf.placeholder(tf.float32, shape=[None, len(features.Player)], name='flat_inputs')  # env stuff: mins, gas, supply, etc -- 11 total
 
         self.inputs = tf.placeholder(tf.int32,[None, *self.screen_dims], name="inputs")  # [None, px1, px2]
-        self.actions = tf.placeholder(tf.float32, [None, np.prod(self.screen_dims)], name='actions')  # e.g:
-        self.targets = tf.placeholder(tf.float32, [None], name="targets")  #*** features.Player is 'broadcast vector'.
+        self.actions = tf.placeholder(tf.float32, [None, np.prod(self.screen_dims)], name='actions')
+        self.targets = tf.placeholder(tf.float32, [None], name="targets")  # so features.Player is broadcast vector.
 
         # preprocessing per rays github
         self.screen_preprocessed = preprocess_spatial_features(self.screen_inputs, screen=True)
@@ -130,9 +138,7 @@ class AlphaCNN():
         minimap_conv2 = tf.nn.relu(minimap_conv2, name='minimap_conv2_out')
 
         # linear layer for non-spatial features (tanh activation)
-        flat_linear = tf.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  # i think this is 'info'/broadcast
-
-
+        flat_linear = tf.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  # broadcast vector (?)
         # flatten layers and concat  (would not flattening and concat along axis=3 work?) NO b/c flat_linear is [None, 64]
         screen_flat = tf.layers.flatten(screen_conv2, name='screen_flat')
         minimap_flat = tf.layers.flatten(minimap_conv2, name='minimap_flat')
@@ -228,4 +234,4 @@ class AlphaCNN():
             name='total_loss')
 
         self.optimizer = tf.train.RMSPropOptimizer(
-            learning_rate=self.learning_rate, epsilon=1e-10).minimize(self.total_loss, global_step=self.global_step)
+            learning_rate=self.learning_rate).minimize(self.total_loss, global_step=self.global_step)
