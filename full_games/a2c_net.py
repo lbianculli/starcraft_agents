@@ -88,65 +88,50 @@ class AlphaCNN():
 
     def _build(self):
         ''' Create network architecture for agent '''
-
-        self.global_step = tf.Variable(
-            0,
-            trainable=False,
-            name='global_step')
-
-        self.global_episode = tf.Variable(
-            0,
-            trainable=False,
-            name='global_episode')
-
-        self.increment_global_episode = tf.assign(
-            self.global_episode,
-            self.global_episode + 1,
-            name='increment_global_episode')
-
+        
         self.score = tf.placeholder(tf.int32, [], name='score')
+        self.global_step = tf.Variable(0,trainable=False,name='global_step')
+        self.global_episode = tf.Variable(0,trainable=False,name='global_episode')
+        self.increment_global_episode = tf.assign(self.global_episode, self.global_episode + 1,
+                                                  name='increment_global_episode')
+        
+        self.inputs = tf.placeholder(tf.int32,[None, *self.screen_dims], name="inputs")  # [None, px1, px2]
+        self.actions = tf.placeholder(tf.float32, [None, np.prod(self.screen_dims)], name='actions')
+        self.targets = tf.placeholder(tf.float32, [None], name="targets")  # features.Player is broadcast vector.
+
         self.screen_inputs = tf.placeholder(tf.int32, shape=[None, len(SCREEN_FEATURES), *self.screen_dims], name='screen_inputs')
         self.minimap_inputs = tf.placeholder(tf.int32, shape=[None, len(MINIMAP_FEATURES), *self.minimap_dims], name='minimap_inputs')
         self.flat_inputs = tf.placeholder(tf.float32, shape=[None, len(features.Player)], name='flat_inputs')  # env stuff: mins, gas, supply, etc -- 11 total
-
-        self.inputs = tf.placeholder(tf.int32,[None, *self.screen_dims], name="inputs")  # [None, px1, px2]
-        self.actions = tf.placeholder(tf.float32, [None, np.prod(self.screen_dims)], name='actions')
-        self.targets = tf.placeholder(tf.float32, [None], name="targets")  # so features.Player is broadcast vector.
-
-        # preprocessing per rays github
         self.screen_preprocessed = preprocess_spatial_features(self.screen_inputs, screen=True)
         self.minimap_preprocessed = preprocess_spatial_features(self.minimap_inputs, screen=False)
         self.flat_preprocessed = tf.log(self.flat_inputs + 1., name='flat_preprocessed')
 
-        # Now onto screen and minimap. weight variables first
-        screen_filters1 = tf.get_variable(name='screen_f1', shape=(5, 5, self.screen_preprocessed.shape[-1], 16))  # should be hwio
+        # onto conv net. filter variables first
+        screen_filters1 = tf.get_variable(name='screen_f1', shape=(5, 5, self.screen_preprocessed.shape[-1], 16))  # hwio
         screen_filters2 = tf.get_variable(name='screen_f2', shape=(3, 3, 16, 32))  # anything else for these?
-        minimap_filters1 = tf.get_variable(name='minimap_f1', shape=(5, 5, self.minimap_preprocessed.shape[-1], 16))  # look back at ray's for this
+        minimap_filters1 = tf.get_variable(name='minimap_f1', shape=(5, 5, self.minimap_preprocessed.shape[-1], 16))  
         minimap_filters2 = tf.get_variable(name='minimap_f2', shape=(3, 3, 16, 32))
 
-        # layers next
         screen_conv1 = tf.nn.conv2d(self.screen_preprocessed, screen_filters1, strides=[1, 1, 1, 1], padding='SAME', name='screen_conv1_in')
         screen_conv1 = tf.nn.relu(screen_conv1, name='screen_conv1_out')
-
         screen_conv2 = tf.nn.conv2d(screen_conv1, screen_filters2, strides=[1, 1, 1, 1], padding='SAME', name='screen_conv2_in')
         screen_conv2 = tf.nn.relu(screen_conv2, name='screen_conv2_out')
 
         minimap_conv1 = tf.nn.conv2d(self.minimap_preprocessed, minimap_filters1, strides=[1, 1, 1, 1], padding='SAME', name='minimap_conv1_in')
         minimap_conv1 = tf.nn.relu(minimap_conv1, name='minimap_conv1_out')
-
         minimap_conv2 = tf.nn.conv2d(minimap_conv1, minimap_filters2, strides=[1, 1, 1, 1], padding='SAME', name='minimap_conv2_in')
         minimap_conv2 = tf.nn.relu(minimap_conv2, name='minimap_conv2_out')
 
         # linear layer for non-spatial features (tanh activation)
-        flat_linear = tf.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  # broadcast vector (?)
-        # flatten layers and concat  (would not flattening and concat along axis=3 work?) NO b/c flat_linear is [None, 64]
+        flat_linear = tf.layers.dense(self.flat_preprocessed, units=64, activation=tf.nn.tanh, name='flat_linear')  
+        
+        # flatten layers and concat. Note: flat_linear is [None, 64]
         screen_flat = tf.layers.flatten(screen_conv2, name='screen_flat')
         minimap_flat = tf.layers.flatten(minimap_conv2, name='minimap_flat')
         concat_layer = tf.concat([screen_flat, minimap_flat, flat_linear], axis=1, name='concat_layer')
 
-        # state representation -- feel like not all this lines up with the paper how i would expect
         self.state_representation = tf.layers.dense(concat_layer, 256, activation=tf.nn.relu, name='state_rep')
-        self.policy = tf.squeeze(tf.layers.dense(  # think i can keep this same (???). Just dont understnd why paper uses a2c
+        self.policy = tf.squeeze(tf.layers.dense(  
             inputs=self.state_representation,
             units=NUM_ACTIONS,
             activation=tf.nn.softmax,
@@ -154,7 +139,7 @@ class AlphaCNN():
 
         # spatial vs. non spatial starts down here
         # action function argument policies (nonspatial)
-        # action function argument placeholders (for optimization)`
+        # action function argument placeholders (for optimization)
         self.argument_policy = dict()
         self.arguments = dict()
 
@@ -178,7 +163,6 @@ class AlphaCNN():
 
                 self.arguments[str(arg_type) + 'x'] = arg_ph_x
                 self.arguments[str(arg_type) + 'y'] = arg_ph_y
-
             else:
                 arg_policy = tf.layers.dense(self.state_representation, units=arg_type.sizes[0], activation=tf.nn.softmax)
                 self.argument_policy[str(arg_type)] = arg_policy
@@ -189,6 +173,7 @@ class AlphaCNN():
 
     def _build_optimization(self):  # "params learnt with AC"
         ''' construct a graph for network updates '''
+        
         self.actions = tf.placeholder(tf.float32, shape=(None, NUM_ACTIONS), name='actions_ph')
         self.reward = tf.placeholder(tf.float32, shape=(None), name='reward_ph')  # actual reward
 
@@ -197,7 +182,6 @@ class AlphaCNN():
         for arg_type in self.arguments:  # arg_type: placeholder where placeholder is coordinate(s)
             # this block will compute probability for each argument
             arg_probability = tf.reduce_sum(self.arguments[arg_type] * self.argument_policy[arg_type])
-
             nonzero_probs = tf.cond(
                 tf.logical_not(tf.equal(arg_probability, 0)),
                 true_fn=lambda: arg_probability,
@@ -206,21 +190,14 @@ class AlphaCNN():
             self.args_prob *= nonzero_probs
             
         self.value_estimate = tf.layers.dense(
-            self.state_representation,
-            units=1,
-            activation=None,
-            name='value_estimate')
+            self.state_representation, units=1, activation=None, name='value_estimate')
 
         self.advantage = tf.subtract(
-            self.reward,
-            tf.squeeze(tf.stop_gradient(self.value_estimate)),
-            name='advantage')
+            self.reward, tf.squeeze(tf.stop_gradient(self.value_estimate)), name='advantage')
 
-        # ac gradient = policy gradient + value gradient + regularization
-        self.policy_loss = -tf.reduce_mean( 
-            (self.advantage * tf.log(self.action_prob * self.args_prob)),
-            name='policy_loss')
-
+        # ac gradient = policy gradient + value gradient + entropy
+        self.policy_loss = -tf.reduce_mean(
+            (self.advantage * tf.log(self.action_prob * self.args_prob)), name='policy_loss')
         self.value_loss = -tf.reduce_mean(
             self.advantage * tf.squeeze(self.value_estimate), name='value_loss')
 
