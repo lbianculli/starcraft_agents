@@ -38,13 +38,6 @@ class Worker(threading.Thread):
   def run(self):
       
 
-discounted_rewards = []
-
-for reward in list(raw_rewards)[::-1]:  # reverse buffer r
-    reward_sum = reward + gamma * reward_sum
-    discounted_rewards.append(reward_sum)
-discounted_rewards.reverse()      
-      
 
   
   
