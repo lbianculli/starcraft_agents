@@ -1,20 +1,18 @@
-import numpy as np
 import os
-import tensorflow as tf
-from collections import deque
-import logging
+import pickle
 
-import a2c_net_tf2 as nets
+import a2c_net as nets
+import numpy as np
 
 from pysc2.agents import base_agent
 from pysc2.lib import actions as sc2_actions
-# from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
-from pysc2.lib import features
+from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 
+print(tf.__version__)
 
 # agent interface settings (defaults specified in pysc2.bin.agent)
-FEATURE_SCREEN_SIZE = [32, 32]
-FEATURE_MINIMAP_SIZE = [32, 32]
+SCREEN_DIMS = [32, 32]
+MINIMAP_DIMS = [32, 32]
 
 # pysc2 convenience
 FUNCTIONS = sc2_actions.FUNCTIONS
@@ -27,19 +25,19 @@ MINIMAP_TYPES = [sc2_actions.TYPES[1]]
 
 
 class a2cAgent(base_agent.BaseAgent):
-    def __init__(self,
-                 learning_rate=1e-4,
-                 value_gradient_strength=.1,  # check these
-                 regularization_strength=.05,
-                 gamma=.99,
-                 training_start=500,
-                 training_steps=250,  # steps between training ops. whats good value here? kept low so that cpu could run
+    def __init__(self,  
+                 learning_rate=1e-5,
+                 value_gradient_strength=.5,  # check these
+                 regularization_strength=.01,
+                 gamma=.95,
+                 cut_trajectory_steps=40,  # was 40 
                  training=True,
-                 save_dir='/home/lbianculli/sc_bot/full_games/logs/ckpts/',
-                 ckpt_name='collect_minerals_5-09',
-                 summary_path='/home/lbianculli/sc_bot/full_games/logs/',
-                 logdir='/home/lbianculli/sc_bot/full_games/logs/variable_logs/',
-                 logdir2='/home/lbianculli/sc_bot/full_games/logs/variable_logs2/',
+                 save_dir='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/ckpts/',
+                 save_file='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/network_saves',
+                 ckpt_name='collect_minerals_6-29',
+                 summary_path='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/summaries/',
+                 logdir='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/variable_logs.txt',
+                 logdir2='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/variable_logs2.txt',
                  log=True):
         super(a2cAgent, self).__init__()  # what does this do again?
 
@@ -54,33 +52,44 @@ class a2cAgent(base_agent.BaseAgent):
         self.value_gradient_strength = value_gradient_strength
         self.regularization_strength = regularization_strength
         self.gamma = gamma
-        self.training_start = training_start
-        self.training_steps = training_steps
+        self.cut_trajectory_steps = cut_trajectory_steps
         self.training = training
+        self.save_file = save_file
 
         if log:
             self._init_logger(logdir, logdir2)
 
         self.save_path = save_dir + ckpt_name + '.ckpt'
 
+        if os.path.isfile(self.save_file + '.npy'):
+            self.initial_steps = np.load(self.save_file + '.npy')  # can i just use loaded step for epsilon as well?
+        else:
+            self.initial_steps = 0
+
         tf.reset_default_graph()
         self.network = nets.AlphaCNN(
-            screen_dims=FEATURE_SCREEN_SIZE,
-            minimap_dims=FEATURE_MINIMAP_SIZE,
-            learning_rate=1e-4,
-            value_gradient_strength=value_gradient_strength,
-            regularization_strength=regularization_strength,
+            screen_dims=SCREEN_DIMS,
+            minimap_dims=MINIMAP_DIMS,
+            learning_rate=self.learning_rate,
+            value_gradient_strength=self.value_gradient_strength,
+            regularization_strength=self.regularization_strength,
             save_path=self.save_path,
-            summary_path=summary_path
-            )
+            summary_path=self.summary_path)
         self.logger.info('Network initialization complete.')
+        
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=config)
 
-        self.sess = tf.Session()
         if os.path.isfile(self.save_path + '.index'):
             self.network.load(self.sess)
+            self.logger.info('Network Loaded')
         else:
             self._init_op()
 
+        self.last_state = None
+        self.episodes = 0
+        self.all_rewards = []
 
     def reset(self):
         # reset isnt currently running.
@@ -90,16 +99,16 @@ class a2cAgent(base_agent.BaseAgent):
 
         if self.training:
             self.last_action = None
-            self.state_buffer = deque(maxlen=self.training_steps)
-            self.action_buffer = deque(maxlen=self.training_steps)
-            self.reward_buffer = deque(maxlen=self.training_steps)
+            self.state_buffer = deque(maxlen=self.cut_trajectory_steps)
+            self.action_buffer = deque(maxlen=self.cut_trajectory_steps)
+            self.reward_buffer = deque(maxlen=self.cut_trajectory_steps)
             self.global_episode = self.network.global_episode.eval(self.sess)
 
 
     def step(self, obs):
         self.steps += 1
-        if self.steps % 100 == 0:
-            self.logger.info(f'STEP NUMBER: {self.steps}')
+        # if self.steps % 100 == 0:
+            # self.logger.info(f'STEP NUMBER: {self.steps}')
         self.reward += obs.reward
 
         if self.training and obs.last():
@@ -124,7 +133,7 @@ class a2cAgent(base_agent.BaseAgent):
                 self.reward_buffer.appendleft(obs.reward)
 
             # train if past certain amount of steps
-            if (self.steps % self.training_steps == 0) and (self.steps > self.training_start):
+            if (self.steps % self.cut_trajectory_steps == 0):
                 self._train_network()
 
             self.last_action = [action_id, args, arg_types]
@@ -157,24 +166,22 @@ class a2cAgent(base_agent.BaseAgent):
         self.network.minimap_inputs: minimap_features,
         self.network.flat_inputs: flat_features}
 
-        function_id_policy = self.sess.run(self.network.function_policy, feed_dict=feed_dict)
+        function_id_policy = self.sess.run(self.network.policy, feed_dict=feed_dict)
         function_id_policy *= action_mask
         function_ids = np.arange(len(function_id_policy))
 
         # renormalize distribution over function identifiers
         function_id_policy /= np.sum(function_id_policy)
-        # self.logger.info(f'FUNCTION_ID_POLICY: {function_id_policy}')
 
         # sample function identifier
         action_id = np.random.choice(function_ids, p=np.squeeze(function_id_policy))  # why do i need to squeeze here?
+
         # sample function arguments:
         arg_types = FUNCTION_TYPES[FUNCTIONS[action_id].function_type]
         args = []
         for arg_type in arg_types:
             if len(arg_type.sizes) > 1:
-                self.logger.info('SPATIAL')
                 # this is a spatial action
-                # self.logger.info(f'ARGUMENT POLICY DICT: {self.network.argument_policy.keys()}')
                 # i think this stuff looks good, but
                 x_policy = self.sess.run(self.network.argument_policy[str(arg_type) + 'x'],feed_dict=feed_dict)
                 y_policy = self.sess.run(self.network.argument_policy[str(arg_type) + 'y'], feed_dict=feed_dict)
@@ -188,17 +195,16 @@ class a2cAgent(base_agent.BaseAgent):
                 y_id = np.random.choice(y_ids, p=y_policy)
                 args.append([x_id,y_id])
 
-            else:
-                self.logger.info('NON-SPATIAL')
+            else:  # would like to understand this a bit better
                 arg_policy = self.sess.run(self.network.argument_policy[str(arg_type)], feed_dict=feed_dict)
                 arg_policy = np.squeeze(arg_policy)
                 arg_ids = np.arange(len(arg_policy))
                 arg_id = np.random.choice(arg_ids, p=arg_policy)
                 args.append([arg_id])
 
-        self.logger.info(f'Action_ids: {action_id}')
-        self.logger.info(f'args: {args}')
-        self.logger.info(f'arg_types: {arg_types}\n')
+        # self.logger.info(f'Action_ids: {action_id}')
+        # self.logger.info(f'args: {args}')
+        # self.logger.info(f'arg_types: {arg_types}\n')
 
 
         return action_id, args, arg_types
@@ -213,12 +219,10 @@ class a2cAgent(base_agent.BaseAgent):
 
         # actions and args. remember, last_action = [action, args, arg_types]
         actions = [act_arg[0] for act_arg in self.action_buffer]  # action_id, args, arg_types
-        actions = np.eye(len(FUNCTIONS))[actions]  # puts a 1 at index specified by action_id value
-
         args = [act_arg[1] for act_arg in self.action_buffer]
         arg_types = [act_arg[2] for act_arg in self.action_buffer]
-        # self.logger.info(f'ARGS: {args}')  # look like coords
-        # self.logger.info(f'ARG TYPES: {arg_types}')  # these are arg types from before. include all function argument types
+
+        actions = np.eye(len(FUNCTIONS))[actions]  # puts a 1 at index specified by action_id value
 
         # rewards
         raw_rewards = list(self.reward_buffer)
@@ -232,9 +236,9 @@ class a2cAgent(base_agent.BaseAgent):
                            self.network.flat_inputs: flat[-1:]}))
 
         discounted_rewards = []
-        # n-step discounted rewards from 1 < n < trajectory_training_steps. *** feel like this isnt right, needs exp(i)?
-        for reward in list(raw_rewards)[::-1]:  # reverse buffer r
-            reward_sum = reward + gamma * value  # 'value' instead of rewar_sum
+
+        for reward in list(raw_rewards)[::-1]:  
+            value = reward + self.gamma * value  # 'value' instead of rewar_sum
             discounted_rewards.append(value)
         discounted_rewards.reverse()  
 
@@ -245,17 +249,17 @@ class a2cAgent(base_agent.BaseAgent):
                      self.network.reward: discounted_rewards}
 
         # add args and arg_types to feed_dict
-        network_args = self.network.arguments  #  dict of phs of shape [None, px], keyed by arg_type  (check)
+        network_args = self.network.arguments  
         batch_size = len(arg_types)  # will always be 1 per action, even for no_ops
 
         for arg_type in sc2_actions.TYPES:
             if len(arg_type.sizes) > 1:
                 if arg_type in SCREEN_TYPES:
-                    x_size = FEATURE_SCREEN_SIZE[0]  #  screen pixels (x)
-                    y_size = FEATURE_SCREEN_SIZE[1]
+                    x_size = SCREEN_DIMS[0]  #  screen pixels (x)
+                    y_size = SCREEN_DIMS[1]
                 elif arg_type in MINIMAP_TYPES:
-                    x_size = FEATURE_MINIMAP_SIZE[0]
-                    y_size = FEATURE_MINIMAP_SIZE[1] # minimap pixles (y)
+                    x_size = MINIMAP_DIMS[0]
+                    y_size = MINIMAP_DIMS[1] # minimap pixles (y)
 
                 feed_dict[network_args[str(arg_type) + "x"]] = np.zeros(
                     (batch_size, x_size))
@@ -264,10 +268,6 @@ class a2cAgent(base_agent.BaseAgent):
             else:
                 feed_dict[network_args[str(arg_type)]] = np.zeros(
                     (batch_size, arg_type.sizes[0]))
-
-        self.logger2.info(f'Net args: {network_args}\n')  # matches above - [None, px] ph
-        self.logger2.info(f'Feed dict 1 keys length: {len(feed_dict.keys())}\n')
-        self.logger2.info(f'Feed dict 1: {feed_dict}\n')  # [None, 17, 32, 32] array -- full_game_CNN/screen_inputs
 
         # then one_hot encode args
         for step in range(batch_size):
@@ -281,10 +281,8 @@ class a2cAgent(base_agent.BaseAgent):
                 else:
                     arg_key = network_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
-        self.logger.info(f'Feed dict final keys length: {len(feed_dict.keys())}\n')  #
-        self.logger.info(f'Feed dict final: {feed_dict}\n')
-        return feed_dict  # ending feed dict will have phs with corresponding intersection
 
+        return feed_dict  # ending feed dict will have phs with corresponding intersection  
 
 
     def _train_network(self, terminal=False):
@@ -292,19 +290,27 @@ class a2cAgent(base_agent.BaseAgent):
         feed_dict = self._get_batch(terminal)  # terminal if episode end
         self.network.optimizer_op(self.sess, feed_dict)
 
-        return feed_dict
+        return feed_dict  # use this in handle_episode_end
 
 
     def _handle_episode_end(self):
-        ''' save weights and write summaries '''
+        ''' save weights and write summaries, trains network, and increments episode '''
 
-        # train network and increment episode
-        feed_dict = self._train_network(terminal=True)  # should i be using this for something ****
+        self.total_steps = self.steps + self.initial_steps
+        self.all_rewards.append(self.reward)
+
+        feed_dict = self._train_network(terminal=True)
         self.network.increment_global_episode_op(self.sess)
         self.network.save_model(self.sess)
-        self.network.write_summary(self.sess, feed_dict)
-        self.logger.info('Model saved and summary written')
+        self.network.write_summary(self.sess, self.global_episode, self.reward, feed_dict)  # ***
 
+        with open(self.save_file, 'wb') as f:
+             pickle.dump(self.total_steps, f)
+        if self.episodes % 20 == 0:
+            self.logger.info(f'Max reward last 20 episodes: {np.max(self.all_rewards[-20:])}')
+            self.logger.info(f'Mean reward last 20 episodes: {np.mean(self.all_rewards[-20:])}')
+
+        self.logger.info('Model saved and summary written')
 
     def _init_op(self):
         init_op = tf.global_variables_initializer()
@@ -328,7 +334,4 @@ class a2cAgent(base_agent.BaseAgent):
             formatter = logging.Formatter('%(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             self.logger2.addHandler(file_handler)
-
-
-
 
