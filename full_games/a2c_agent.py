@@ -25,12 +25,12 @@ MINIMAP_TYPES = [sc2_actions.TYPES[1]]
 
 
 class a2cAgent(base_agent.BaseAgent):
-    def __init__(self,  
+    def __init__(self,
                  learning_rate=1e-5,
-                 value_gradient_strength=.5,  # check these
+                 value_gradient_strength=.5,  # .01 for sure not sure about first
                  regularization_strength=.01,
-                 gamma=.95,
-                 cut_trajectory_steps=40,  # was 40 
+                 gamma=.99,
+                 cut_trajectory_steps=40,
                  training=True,
                  save_dir='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/ckpts/',
                  save_file='C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/network_saves',
@@ -76,7 +76,7 @@ class a2cAgent(base_agent.BaseAgent):
             save_path=self.save_path,
             summary_path=self.summary_path)
         self.logger.info('Network initialization complete.')
-        
+
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)
@@ -90,6 +90,8 @@ class a2cAgent(base_agent.BaseAgent):
         self.last_state = None
         self.episodes = 0
         self.all_rewards = []
+
+        self.online_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'ac_net')
 
     def reset(self):
         # reset isnt currently running.
@@ -148,7 +150,6 @@ class a2cAgent(base_agent.BaseAgent):
                        available_actions):
         '''
         Sample action and args from policy
-
         Returns --
         action_id: index of action
         args: for spatial x,y coords; for non-spatial output from self.network.argument_policy
@@ -237,10 +238,10 @@ class a2cAgent(base_agent.BaseAgent):
 
         discounted_rewards = []
 
-        for reward in list(raw_rewards)[::-1]:  
+        for reward in list(raw_rewards)[::-1]:
             value = reward + self.gamma * value  # 'value' instead of rewar_sum
             discounted_rewards.append(value)
-        discounted_rewards.reverse()  
+        discounted_rewards.reverse()
 
         feed_dict = {self.network.screen_inputs: screen,
                      self.network.minimap_inputs: minimap,
@@ -249,7 +250,7 @@ class a2cAgent(base_agent.BaseAgent):
                      self.network.reward: discounted_rewards}
 
         # add args and arg_types to feed_dict
-        network_args = self.network.arguments  
+        network_args = self.network.arguments
         batch_size = len(arg_types)  # will always be 1 per action, even for no_ops
 
         for arg_type in sc2_actions.TYPES:
@@ -273,7 +274,7 @@ class a2cAgent(base_agent.BaseAgent):
         for step in range(batch_size):
             for i, arg_type in enumerate(arg_types[step]):
                 if len(arg_type.sizes) > 1:
-                    arg_key_x = network_args[str(arg_type) + "x"]  
+                    arg_key_x = network_args[str(arg_type) + "x"]
                     feed_dict[arg_key_x][step, args[step][i][0]] = 1  # this is rough
 
                     arg_key_y = network_args[str(arg_type) + "x"]
@@ -282,7 +283,7 @@ class a2cAgent(base_agent.BaseAgent):
                     arg_key = network_args[str(arg_type)]
                     feed_dict[arg_key][step, args[step][i][0]] = 1
 
-        return feed_dict  # ending feed dict will have phs with corresponding intersection  
+        return feed_dict  # ending feed dict will have phs with corresponding intersection
 
 
     def _train_network(self, terminal=False):
@@ -334,4 +335,3 @@ class a2cAgent(base_agent.BaseAgent):
             formatter = logging.Formatter('%(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             self.logger2.addHandler(file_handler)
-
