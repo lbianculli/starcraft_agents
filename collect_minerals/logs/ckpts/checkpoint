@@ -1,0 +1,2 @@
+model_checkpoint_path: "C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/ckpts/collect_minerals_6-29.ckpt"
+all_model_checkpoint_paths: "C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/ckpts/collect_minerals_6-29.ckpt"

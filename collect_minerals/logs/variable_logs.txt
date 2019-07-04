@@ -1,0 +1,3 @@
+INFO - To view Tensorboard, run tensorboard --logdir=C:/Users/lbianculli/venv1/sc_bot/minigames/collect_minerals/logs/summaries/
+INFO - Network initialization complete.
+INFO - Network Loaded
