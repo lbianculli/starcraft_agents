@@ -209,14 +209,16 @@ class A3CAgent(base_agent.BaseAgent):
     args = []
     for arg_type in arg_types:
       self.logger.info(f"ARG TYPE: {arg_type}")
+      self.logger.info(f"ARG TYPE NAME({arg_type.name}")
       if len(arg_type.sizes) > 1:
+#       if arg_type.name in ('screen', 'minimap', 'screen2'):
           x_policy = self.sess.run(
               self.argument_policy[str(arg_type) + "x"],
-              feed_dict=feed_dict)
+              feed_dict=feed)
 
           y_policy = self.sess.run(
               self.argument_policy[str(arg_type) + "y"],
-              feed_dict=feed_dict)
+              feed_dict=feed)
 
           x_policy = np.squeeze(x_policy)
           x_ids = np.arange(len(x_policy))
@@ -229,14 +231,16 @@ class A3CAgent(base_agent.BaseAgent):
       else:
           arg_policy = self.sess.run(
               self.argument_policy[str(arg_type)],
-              feed_dict=feed_dict)
+              feed_dict=feed)
 
           arg_policy = np.squeeze(arg_policy)
           arg_ids = np.arange(len(arg_policy))
           arg_index = np.random.choice(arg_ids, p=arg_policy)
-          args.append([arg_index])
+          args.append([arg_index])  # can try this. not sure it will work
+#           args.append([actions.functions[arg_id].args])  # could also try these two
+#           args.append([0])
 
-    return actions.FunctionCall(act_id, act_args)
+    return actions.FunctionCall(act_id, args)  #  if i cant figure out, log fom pysc2 random agent
 
 
   def update(self, replay_buffer, disc, lr, counter):
