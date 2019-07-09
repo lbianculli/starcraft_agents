@@ -69,9 +69,7 @@ class A3CAgent(base_agent.BaseAgent):
       # Build networks
       net = networks.build_net(self.minimap, self.screen, self.info, self.msize, self.ssize, len(actions.FUNCTIONS))
       # will below give me nonetype error too? if so it is b/c arguments and/or argument_policy 100%
-      self.spatial_policy, self.non_spatial_policy, self.state_representation, self.value, self.arguments, self.argument_policy = net
-      # self._build()  # this is throwing the error, related to state_rep. dont think i need
-
+      self.spatial_policy, self.non_spatial_policy, self.state_representation, self.value = net
 
       # Set targets and masks
       self.valid_spatial_action = tf.placeholder(tf.float32, [None], name='valid_spatial_action')
@@ -80,18 +78,18 @@ class A3CAgent(base_agent.BaseAgent):
       self.non_spatial_action_selected = tf.placeholder(tf.float32, [None, self.isize], name='non_spatial_action_selected')
       self.value_target = tf.placeholder(tf.float32, [None], name='value_target')
 
-      # Compute log probability -- what do these look like exactly? 
-      spatial_action_prob = tf.reduce_sum(self.spatial_policy * self.spatial_action_selected, axis=1) 
+      # Compute log probability -- what do these look like exactly?
+      spatial_action_prob = tf.reduce_sum(self.spatial_policy * self.spatial_action_selected, axis=1)
       spatial_action_log_prob = tf.log(tf.clip_by_value(spatial_action_prob, 1e-10, 1.))
       non_spatial_action_prob = tf.reduce_sum(self.non_spatial_policy * self.non_spatial_action_selected, axis=1)
       valid_non_spatial_action_prob = tf.reduce_sum(self.non_spatial_policy * self.valid_non_spatial_action, axis=1)
       valid_non_spatial_action_prob = tf.clip_by_value(valid_non_spatial_action_prob, 1e-10, 1.)
-      non_spatial_action_prob = non_spatial_action_prob / valid_non_spatial_action_prob 
+      non_spatial_action_prob = non_spatial_action_prob / valid_non_spatial_action_prob
       non_spatial_action_log_prob = tf.log(tf.clip_by_value(non_spatial_action_prob, 1e-10, 1.))
       self.summary.append(tf.summary.histogram('spatial_action_prob', spatial_action_prob))
       self.summary.append(tf.summary.histogram('non_spatial_action_prob', non_spatial_action_prob))
-      self.logger.info(f"spatial_action_log_prob: {spatial_action_log_prob}")
-      self.logger.info(f"spatial_action_selected: {self.spatial_action_selected}")  # how does spatial_action_selected look, probs?
+      # self.logger.info(f"spatial_action_log_prob: {spatial_action_log_prob}")
+      # self.logger.info(f"spatial_action_selected: {self.spatial_action_selected}")  # how does spatial_action_selected look, probs?
 
       # Compute losses, more details in https://arxiv.org/abs/1602.01783
       # Policy loss and value loss
@@ -108,7 +106,7 @@ class A3CAgent(base_agent.BaseAgent):
       # TODO: policy penalty/entropy
       # loss = policy_loss + value_loss
       loss = tf.add_n([
-        policy_loss, self.value_regularisation * value_loss, self.entropy_regularisation * entropy], 
+        policy_loss, self.value_regularisation * value_loss, self.entropy_regularisation * entropy],
         name="total_loss")
 
       # Build the optimizer
@@ -119,12 +117,60 @@ class A3CAgent(base_agent.BaseAgent):
       for grad, var in grads:
         self.summary.append(tf.summary.histogram(var.op.name, var))
         self.summary.append(tf.summary.histogram(var.op.name+'/grad', grad))
-        grad = tf.clip_by_norm(grad, 10.0)
+        grad = tf.clip_by_norm(grad, 10.0)  # is this an ideal value to clip with?
         cliped_grad.append([grad, var])
       self.train_op = opt.apply_gradients(cliped_grad)
       self.summary_op = tf.summary.merge(self.summary)
 
       self.saver = tf.train.Saver(max_to_keep=10)
+
+      self.argument_policy = dict()
+      self.arguments = dict()
+      for arg_type in actions.TYPES:
+
+        # for spatial actions, represent each dimension independently
+        if len(arg_type.sizes) > 1:
+          if arg_type in SCREEN_TYPES:
+            units = self.ssize
+          elif arg_type in MINIMAP_TYPES:
+            units = self.msize
+
+          arg_policy_x = layers.fully_connected(
+            self.state_representation,
+            num_outputs=units,
+            activation_fn=tf.nn.softmax)
+
+          arg_policy_y = layers.fully_connected(
+              self.state_representation,
+              num_outputs=units,
+              activation_fn=tf.nn.softmax)
+
+          self.argument_policy[str(arg_type) + "x"] = arg_policy_x
+          self.argument_policy[str(arg_type) + "y"] = arg_policy_y
+
+          arg_placeholder_x = tf.placeholder(
+              tf.float32,
+              shape=[None, units])
+
+          arg_placeholder_y = tf.placeholder(
+              tf.float32,
+              shape=[None, units])
+
+          self.arguments[str(arg_type) + "x"] = arg_placeholder_x
+          self.arguments[str(arg_type) + "y"] = arg_placeholder_y
+
+        else:
+          arg_policy = layers.fully_connected(self.state_representation,
+              num_outputs=arg_type.sizes[0],
+              activation_fn=tf.nn.softmax)
+
+          self.argument_policy[str(arg_type)] = arg_policy
+
+          arg_placeholder = tf.placeholder(
+              tf.float32,
+              shape=[None, arg_type.sizes[0]])
+
+          self.arguments[str(arg_type)] = arg_placeholder
 
 
   def reset(self):
@@ -145,11 +191,11 @@ class A3CAgent(base_agent.BaseAgent):
             self.screen: screen,
             self.info: info}
 
-    
+
 ############### RAY'S CODE ################
 #       action_mask = np.zeros(len(FUNCTIONS), dtype=np.int32)
 #       action_mask[available_actions] = 1
-    
+
 #     function_id_policy = self.sess.run(     # function_policy is non-spatial
 #         self.non_spatial_policy,
 #         feed_dict=feed_dict)
@@ -165,18 +211,18 @@ class A3CAgent(base_agent.BaseAgent):
 #           function_ids,
 #           p=np.squeeze(function_id_policy))
 ############################################
-  
+
     # Select an action and a spatial target.
     valid_actions = np.zeros(self.isize, dtype=np.int32)
     valid_actions[obs.observation['available_actions']] = 1
     function_id_policy, spatial_policy = self.sess.run(
       [self.non_spatial_policy, self.spatial_policy],
       feed_dict=feed)
-                
+
     function_id_policy = function_id_policy.ravel()  # .ravel flattens the input into 1D array
     spatial_policy = spatial_policy.ravel()
     function_id_policy *= valid_actions
-    
+
     function_ids = np.arange(len(function_id_policy))
     function_id_policy /= np.sum(function_id_policy)  # is naming correct?
 #     act_id = valid_actions[np.argmax(non_spatial_policy[valid_actions])]
@@ -185,7 +231,7 @@ class A3CAgent(base_agent.BaseAgent):
     target = [int(target // self.ssize), int(target % self.ssize)]  # not sure
 
     if False:  # ???
-      self.logger.info(actions.FUNCTIONS[act_id].name, target)
+      self.logger.info(f"if false: {actions.FUNCTIONS[act_id].name, target}")
 
     # Epsilon greedy exploration. This should be totally re-done
 #     if self.training and np.random.rand() < self.epsilon[0]: # choose action
@@ -205,11 +251,11 @@ class A3CAgent(base_agent.BaseAgent):
 #       else: # non-spatial
 #         act_args.append([0])  # TODO: Be careful -- b/c just [0] (?)
 
-    arg_types = FUNCTION_TYPES[FUNCTIONS[act_id].function_type]
+    arg_types = actions.FUNCTION_TYPES[actions.FUNCTIONS[act_id].function_type]
     args = []
     for arg_type in arg_types:
-      self.logger.info(f"ARG TYPE: {arg_type}")
-      self.logger.info(f"ARG TYPE NAME({arg_type.name}")
+      # self.logger.info(f"ARG TYPE: {arg_type}")
+      # self.logger.info(f"ARG TYPE NAME({arg_type.name}")
       if len(arg_type.sizes) > 1:
 #       if arg_type.name in ('screen', 'minimap', 'screen2'):
           x_policy = self.sess.run(
@@ -246,7 +292,7 @@ class A3CAgent(base_agent.BaseAgent):
   def update(self, replay_buffer, disc, lr, counter):
     """ replay_buffer is list of recorders, which are lists of (s, a, s`) """
     # Compute R, which is value of the last observation
-    obs = replay_bufer[-1][-1]  # last state of most recent loop
+    obs = replay_buffer[-1][-1]  # last state of most recent loop
     if obs.last():
       R = 0
     else:
@@ -267,16 +313,16 @@ class A3CAgent(base_agent.BaseAgent):
     screens = []
     infos = []
 
-    value_target = np.zeros([len(replay_bufer)], dtype=np.float32)
+    value_target = np.zeros([len(replay_buffer)], dtype=np.float32)
     value_target[-1] = R
 
-    valid_spatial_action = np.zeros([len(replay_bufer)], dtype=np.float32)
-    spatial_action_selected = np.zeros([len(replay_bufer), self.ssize**2], dtype=np.float32)
-    valid_non_spatial_action = np.zeros([len(replay_bufer), self.isize], dtype=np.float32)
-    non_spatial_action_selected = np.zeros([len(replay_bufer), self.isize], dtype=np.float32)
+    valid_spatial_action = np.zeros([len(replay_buffer)], dtype=np.float32)
+    spatial_action_selected = np.zeros([len(replay_buffer), self.ssize**2], dtype=np.float32)
+    valid_non_spatial_action = np.zeros([len(replay_buffer), self.isize], dtype=np.float32)
+    non_spatial_action_selected = np.zeros([len(replay_buffer), self.isize], dtype=np.float32)
 
-    reply_buffer.reverse()
-    for i, [obs, action, next_obs] in enumerate(replay_bufer):
+    replay_buffer.reverse()
+    for i, [obs, action, next_obs] in enumerate(replay_buffer):
       minimap = np.array(obs.observation['feature_minimap'], dtype=np.float32)
       minimap = np.expand_dims(U.preprocess_minimap(minimap), axis=0)
       screen = np.array(obs.observation['feature_screen'], dtype=np.float32)
@@ -302,7 +348,7 @@ class A3CAgent(base_agent.BaseAgent):
       for arg, act_arg in zip(args, act_args):  # set up masks
         if arg.name in ('screen', 'minimap', 'screen2'):
           ind = act_arg[1] * self.ssize + act_arg[0]
-          valid_spatial_action[i] = 1  
+          valid_spatial_action[i] = 1
           spatial_action_selected[i, ind] = 1
 
     minimaps = np.concatenate(minimaps, axis=0)
@@ -341,5 +387,4 @@ class A3CAgent(base_agent.BaseAgent):
       formatter = logging.Formatter('%(levelname)s - %(message)s')
       file_handler.setFormatter(formatter)
       self.logger.addHandler(file_handler)
-
 
