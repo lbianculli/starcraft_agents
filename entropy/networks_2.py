@@ -2,9 +2,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from pysc2.lib import actions
 import tensorflow as tf
 import tensorflow.contrib.layers as layers
 import utils as U
+
+
+SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]
+MINIMAP_TYPES = [actions.TYPES[1]]
 
 
 def build_net(minimap, screen, info, msize, ssize, num_action):
@@ -32,54 +37,6 @@ def build_net(minimap, screen, info, msize, ssize, num_action):
   state_representation = layers.fully_connected(state_representation, num_outputs=256, activation_fn=tf.nn.relu, scope='state_rep')
   non_spatial_action = layers.fully_connected(state_representation, num_outputs=num_action, activation_fn=tf.nn.softmax, scope='non_spatial_action')
   value = tf.reshape(layers.fully_connected(state_representation, num_outputs=1, activation_fn=None, scope='value'), [-1])
-  
-  argument_policy = dict()
-  arguments = dict()
-  for arg_type in actions.TYPES:
 
-      # for spatial actions, represent each dimension independently
-      if len(arg_type.sizes) > 1:
-          if arg_type in SCREEN_TYPES:
-              units = ssize
-          elif arg_type in MINIMAP_TYPES:
-              units = msize
 
-          arg_policy_x = layers.fully_connected(
-              inputs=state_representation,
-              units=units,
-              activation=tf.nn.softmax)
-
-          arg_policy_y = layers.fully_connected(
-              state_representation,
-              units,
-              activation=tf.nn.softmax)
-
-          argument_policy[str(arg_type) + "x"] = arg_policy_x
-          argument_policy[str(arg_type) + "y"] = arg_policy_y
-
-          arg_placeholder_x = tf.placeholder(
-              tf.float32,
-              shape=[None, units])
-
-          arg_placeholder_y = tf.placeholder(
-              tf.float32,
-              shape=[None, units])
-
-          arguments[str(arg_type) + "x"] = arg_placeholder_x
-          arguments[str(arg_type) + "y"] = arg_placeholder_y
-
-      else:
-          arg_policy = layers.fully_connected(state_representation,
-              num_outputs=arg_type.sizes[0],
-              activation=tf.nn.softmax)
-
-          argument_policy[str(arg_type)] = arg_policy
-
-          arg_placeholder = tf.placeholder(
-              tf.float32,
-              shape=[None, arg_type.sizes[0]])
-
-          arguments[str(arg_type)] = arg_placeholder
-
-  return spatial_action, non_spatial_action, state_representation, value, arguments, argument_policy
-
+  return spatial_action, non_spatial_action, state_representation, value
