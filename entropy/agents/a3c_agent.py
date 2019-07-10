@@ -74,7 +74,7 @@ class A3CAgent(base_agent.BaseAgent):
       # Set targets and masks
       self.valid_spatial_action = tf.placeholder(tf.float32, [None], name='valid_spatial_action')
       self.spatial_action_selected = tf.placeholder(tf.float32, [None, self.ssize**2], name='spatial_action_selected')
-      self.valid_non_spatial_action = tf.placeholder(tf.float32, [None, self.isize], name='valid_non_spatial_action')
+      self.valid_non_spatial_action = tf.placeholder(tf.float32, [None, self.isize], name='valid_non_spatial_action')  # these match w. actions in previous
       self.non_spatial_action_selected = tf.placeholder(tf.float32, [None, self.isize], name='non_spatial_action_selected')
       self.value_target = tf.placeholder(tf.float32, [None], name='value_target')
 
@@ -88,7 +88,9 @@ class A3CAgent(base_agent.BaseAgent):
       non_spatial_action_log_prob = tf.log(tf.clip_by_value(non_spatial_action_prob, 1e-10, 1.))
       self.summary.append(tf.summary.histogram('spatial_action_prob', spatial_action_prob))
       self.summary.append(tf.summary.histogram('non_spatial_action_prob', non_spatial_action_prob))
-      # self.logger.info(f"spatial_action_log_prob: {spatial_action_log_prob}")
+      self.summary.append(tf.summary.histogram('spatial_action_log_prob', spatial_action_log_prob))
+      self.summary.append(tf.summary.histogram('non_spatial_action_log_prob', non_spatial_action_log_prob))
+      # self.logger.info(f"non_spatial_action_log_prob: {non_spatial_action_log_prob}")
       # self.logger.info(f"spatial_action_selected: {self.spatial_action_selected}")  # how does spatial_action_selected look, probs?
 
       # Compute losses, more details in https://arxiv.org/abs/1602.01783
@@ -98,17 +100,18 @@ class A3CAgent(base_agent.BaseAgent):
       policy_loss = - tf.reduce_mean(action_log_prob * advantage)
       value_loss = - tf.reduce_mean(self.value * advantage)
       entropy = tf.reduce_sum(self.non_spatial_policy * tf.log(self.non_spatial_policy), name='entropy')
+      self.summary.append(tf.summary.scalar("Entropy", entropy))
 
       self.summary.append(tf.summary.scalar('policy_loss', policy_loss))
       self.summary.append(tf.summary.scalar('value_loss', value_loss))
-      self.summary.append(tf.summary.scalar('Score', self.score))
+      # self.summary.append(tf.summary.scalar('Score', self.score))
 
       # TODO: policy penalty/entropy
       # loss = policy_loss + value_loss
       loss = tf.add_n([
         policy_loss, self.value_regularisation * value_loss, self.entropy_regularisation * entropy],
-        name="total_loss")
-
+        name="loss")
+      self.summary.append(tf.summary.scalar("total_loss", loss))
       # Build the optimizer
       self.learning_rate = tf.placeholder(tf.float32, None, name='learning_rate')
       opt = tf.train.RMSPropOptimizer(self.learning_rate, decay=0.99, epsilon=1e-10)
@@ -236,60 +239,60 @@ class A3CAgent(base_agent.BaseAgent):
     # Epsilon greedy exploration. This should be totally re-done
 #     if self.training and np.random.rand() < self.epsilon[0]: # choose action
 #       act_id = np.random.choice(valid_actions)
-#     if self.training and np.random.rand() < self.epsilon[1]:
-#       dy = np.random.randint(-4, 5)
-#       target[0] = int(max(0, min(self.ssize-1, target[0]+dy)))  # relates to target above
-#       dx = np.random.randint(-4, 5)
-#       target[1] = int(max(0, min(self.ssize-1, target[1]+dx)))
+    if self.training and np.random.rand() < self.epsilon[1]:
+      dy = np.random.randint(-4, 5)
+      target[0] = int(max(0, min(self.ssize-1, target[0]+dy)))  # relates to target above
+      dx = np.random.randint(-4, 5)
+      target[1] = int(max(0, min(self.ssize-1, target[1]+dx)))
 
-    # Set act_id and act_args
-#     act_args = []
-#     for arg in actions.FUNCTIONS[act_id].args: # spatial
-#       self.logger.info(f"ARG: {arg}")
-#       if arg.name in ('screen', 'minimap', 'screen2'):
-#         act_args.append([target[1], target[0]])  # coords
-#       else: # non-spatial
-#         act_args.append([0])  # TODO: Be careful -- b/c just [0] (?)
+#    # Set act_id and act_args
+    # act_args = []
+    # for arg in actions.FUNCTIONS[act_id].args: # spatial
+    #   # self.logger.info(f"ARG: {arg}")
+    #   if arg.name in ('screen', 'minimap', 'screen2'):
+        # act_args.append([target[1], target[0]])  # coords
+    #   else: # non-spatial
+    #     act_args.append([0])  # TODO: Be careful -- b/c just [0] (?)
 
-    arg_types = actions.FUNCTION_TYPES[actions.FUNCTIONS[act_id].function_type]
     args = []
-    for arg_type in arg_types:
-      # self.logger.info(f"ARG TYPE: {arg_type}")
-      # self.logger.info(f"ARG TYPE NAME({arg_type.name}")
-      if len(arg_type.sizes) > 1:
-#       if arg_type.name in ('screen', 'minimap', 'screen2'):
-          x_policy = self.sess.run(
-              self.argument_policy[str(arg_type) + "x"],
-              feed_dict=feed)
+    # trying to do w/ smaller movements. see if that helps at all
+    for arg in actions.FUNCTIONS[act_id].args:
+      if arg.name in ('screen', 'minimap', 'screen2'):
+#       if arg.name in ('screen', 'minimap', 'screen2'):
+          # x_policy = self.sess.run(
+          #     self.argument_policy[str(arg) + "x"],
+          #     feed_dict=feed)
 
-          y_policy = self.sess.run(
-              self.argument_policy[str(arg_type) + "y"],
-              feed_dict=feed)
+          # y_policy = self.sess.run(
+          #     self.argument_policy[str(arg) + "y"],
+          #     feed_dict=feed)
 
-          x_policy = np.squeeze(x_policy)
-          x_ids = np.arange(len(x_policy))
-          x = np.random.choice(x_ids, p=x_policy)
+          # x_policy = np.squeeze(x_policy)
+          # x_ids = np.arange(len(x_policy))
+          # x = np.random.choice(x_ids, p=x_policy)
 
-          y_policy = np.squeeze(y_policy)
-          y_ids = np.arange(len(y_policy))
-          y = np.random.choice(y_ids, p=y_policy)
-          args.append([x, y])
+          # y_policy = np.squeeze(y_policy)
+          # y_ids = np.arange(len(y_policy))
+          # y = np.random.choice(y_ids, p=y_policy)
+          # args.append([x, y])
+          args.append([target[1], target[0]])
+          self.logger.info(f"target coords: {[target[1], target[0]]}")
       else:
           arg_policy = self.sess.run(
-              self.argument_policy[str(arg_type)],
+              self.argument_policy[str(arg)],
               feed_dict=feed)
-
           arg_policy = np.squeeze(arg_policy)
           arg_ids = np.arange(len(arg_policy))
           arg_index = np.random.choice(arg_ids, p=arg_policy)
           args.append([arg_index])  # can try this. not sure it will work
+          self.logger.info(f"arg: index: {arg_index}")  # not sure what this is... how to check? usually 0, 1. have seen up to 9
 #           args.append([actions.functions[arg_id].args])  # could also try these two
 #           args.append([0])
 
-    return actions.FunctionCall(act_id, args)  #  if i cant figure out, log fom pysc2 random agent
+    return actions.FunctionCall(act_id, args)  #  if i cant figure out, log fom pysc2 random agent -- what are args EXACTLY?
 
 
-  def update(self, replay_buffer, disc, lr, counter):
+  def update(self, replay_buffer, discount, lr, counter):
     """ replay_buffer is list of recorders, which are lists of (s, a, s`) """
     # Compute R, which is value of the last observation
     obs = replay_buffer[-1][-1]  # last state of most recent loop
@@ -338,7 +341,7 @@ class A3CAgent(base_agent.BaseAgent):
       act_id = action.function
       act_args = action.arguments
 
-      value_target[i] = self.reward + disc * value_target[i-1]
+      value_target[i] = self.reward + discount * value_target[i-1]
 
       valid_actions = obs.observation["available_actions"]
       valid_non_spatial_action[i, valid_actions] = 1
