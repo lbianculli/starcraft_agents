@@ -99,8 +99,9 @@ class A3CAgent(base_agent.BaseAgent):
       advantage = tf.stop_gradient(self.value_target - self.value)
       policy_loss = - tf.reduce_mean(action_log_prob * advantage)
       value_loss = tf.reduce_mean(self.value * advantage)
+      # entropy_loss = tf.reduce_mean(entropy) * self.entropy_regularisation
       entropy_loss = tf.reduce_sum(self.non_spatial_policy * tf.log(self.non_spatial_policy), name='entropy')  # reduce_sum or mean?
-      self.summary.append(tf.summary.scalar("Entropy", entropy))
+      self.summary.append(tf.summary.scalar("entropy_loss", entropy_loss))
 
       self.summary.append(tf.summary.scalar('policy_loss', policy_loss))
       self.summary.append(tf.summary.scalar('value_loss', value_loss))
@@ -108,29 +109,31 @@ class A3CAgent(base_agent.BaseAgent):
       # TODO: policy penalty/entropy
       # loss = policy_loss + value_loss
       total_loss = policy_loss + (value_loss * self.value_regularisation) - (entropy_loss * self.entropy_regularisation)
-      self.summary.append(tf.summary.scalar("total_loss", loss))
+      self.summary.append(tf.summary.scalar("total_loss", total_loss))
       # Build the optimizer
       self.learning_rate = tf.placeholder(tf.float32, None, name='learning_rate')
       opt = tf.train.RMSPropOptimizer(self.learning_rate, decay=0.99, epsilon=1e-10)
       grads = opt.compute_gradients(total_loss)
       cliped_grad = []
       for grad, var in grads:
+        self.logger.info(f"CHECK1: {var}")
         self.summary.append(tf.summary.histogram(var.op.name, var))
         self.summary.append(tf.summary.histogram(var.op.name+'/grad', grad))
         grad = tf.clip_by_norm(grad, 10.0)  # is this an ideal value to clip with?
         cliped_grad.append([grad, var])
+        self.logger.info(f"CHECK2: {var}")
       self.train_op = opt.apply_gradients(cliped_grad)
       self.summary_op = tf.summary.merge(self.summary)
 
       self.saver = tf.train.Saver(max_to_keep=10)
 
-      self.argument_policy = dict()  
+      self.argument_policy = dict()
       self.arguments = dict()
       for arg_type in actions.TYPES:
         # for spatial actions, represent each dimension independently
         # what if instead of making the output units, i make it a smaller number
         # then do something similar to what eps greedy is doing now?
-        if len(arg_type.sizes) > 1:  # if spatial
+        if len(arg_type.sizes) > 1:  # if spatial.  ***
           if arg_type in SCREEN_TYPES:
             units = self.ssize
           elif arg_type in MINIMAP_TYPES:
@@ -191,28 +194,31 @@ class A3CAgent(base_agent.BaseAgent):
     feed = {self.minimap: minimap,
             self.screen: screen,
             self.info: info}
-    
+
     # Select an action and a spatial target.
     valid_actions = np.zeros(self.isize, dtype=np.int32)
     valid_actions[obs.observation['available_actions']] = 1
     function_id_policy, spatial_policy = self.sess.run(
       [self.non_spatial_policy, self.spatial_policy],
       feed_dict=feed)
-    
-    self.logger.info(f"spatial_policy unraveled: {spatial_policy}")
+
+    # self.logger.info(f"spatial_policy unraveled: {spatial_policy}.")
+    # self.logger.info(f":{spatial_policy.shape}.")
+
     function_id_policy = function_id_policy.ravel()  # .ravel flattens the input into 1D array
     spatial_policy = spatial_policy.ravel()
-    self.logger.info(f"spatial_policy .raveled: {spatial_policy}")  # this will help with target below
+    # self.logger.info(f"spatial_policy .raveled: {spatial_policy}")  # this will help with target below
+    # self.logger.info(f":{spatial_policy.shape}.")
     function_id_policy *= valid_actions
 
     function_ids = np.arange(len(function_id_policy))
-    function_id_policy /= np.sum(function_id_policy) 
+    function_id_policy /= np.sum(function_id_policy)
 #     act_id = valid_actions[np.argmax(non_spatial_policy[valid_actions])]
     act_id = np.random.choice(function_ids, p=np.squeeze(function_id_policy))
-    target = np.argmax(spatial_policy) # ***
-    target = [int(target // self.ssize), int(target % self.ssize)]  # not sure
+    target = np.argmax(spatial_policy) # currentl will be (,1024)
+    target = [int(target // self.ssize), int(target % self.ssize)]  # not sure why different operators
 
-    if False:  
+    if False:
       self.logger.info(f"if false: {actions.FUNCTIONS[act_id].name, target}")
 
     # Epsilon greedy exploration. Keeping this to see if it works
@@ -244,7 +250,7 @@ class A3CAgent(base_agent.BaseAgent):
           # y = np.random.choice(y_ids, p=y_policy)
           # args.append([x, y])
           args.append([target[1], target[0]])
-          self.logger.info(f"target coords: {[target[1], target[0]]}")
+          # self.logger.info(f"target coords: {[target[1], target[0]]}")
       else:
           arg_policy = self.sess.run(
               self.argument_policy[str(arg)],
@@ -252,10 +258,10 @@ class A3CAgent(base_agent.BaseAgent):
           arg_policy = np.squeeze(arg_policy)
           arg_ids = np.arange(len(arg_policy))
           arg_index = np.random.choice(arg_ids, p=arg_policy)
-          args.append([arg_index])  
-          self.logger.info(f"arg: index: {arg_index}") 
+          args.append([arg_index])
+          # self.logger.info(f"arg: index: {arg_index}")
 #           args.append([0])
-    
+
     # sizes: The max+1 of each of the dimensions this argument takes.
     return actions.FunctionCall(act_id, args)  #  args should be int from (0, arg.size)
 
@@ -325,7 +331,7 @@ class A3CAgent(base_agent.BaseAgent):
     minimaps = np.concatenate(minimaps, axis=0)
     screens = np.concatenate(screens, axis=0)
     infos = np.concatenate(infos, axis=0)
-    
+
     # Train
     feed = {self.minimap: minimaps,
             self.screen: screens,
@@ -335,7 +341,7 @@ class A3CAgent(base_agent.BaseAgent):
             self.spatial_action_selected: spatial_action_selected,
             self.valid_non_spatial_action: valid_non_spatial_action,
             self.non_spatial_action_selected: non_spatial_action_selected,
-            self.learning_rate: lr,} 
+            self.learning_rate: lr,}
     _, summary = self.sess.run([self.train_op, self.summary_op], feed_dict=feed)
     self.summary_writer.add_summary(summary, counter)
 
