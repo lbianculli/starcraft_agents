@@ -104,7 +104,6 @@ class A3CAgent(base_agent.BaseAgent):
 
       self.summary.append(tf.summary.scalar('policy_loss', policy_loss))
       self.summary.append(tf.summary.scalar('value_loss', value_loss))
-      # self.summary.append(tf.summary.scalar('Score', self.score))
 
       # TODO: policy penalty/entropy
       # loss = policy_loss + value_loss
@@ -127,12 +126,13 @@ class A3CAgent(base_agent.BaseAgent):
 
       self.saver = tf.train.Saver(max_to_keep=10)
 
-      self.argument_policy = dict()
+      self.argument_policy = dict()  
       self.arguments = dict()
       for arg_type in actions.TYPES:
-
         # for spatial actions, represent each dimension independently
-        if len(arg_type.sizes) > 1:
+        # what if instead of making the output units, i make it a smaller number
+        # then do something similar to what eps greedy is doing now?
+        if len(arg_type.sizes) > 1:  # if spatial
           if arg_type in SCREEN_TYPES:
             units = self.ssize
           elif arg_type in MINIMAP_TYPES:
@@ -162,7 +162,7 @@ class A3CAgent(base_agent.BaseAgent):
           self.arguments[str(arg_type) + "x"] = arg_placeholder_x
           self.arguments[str(arg_type) + "y"] = arg_placeholder_y
 
-        else:
+        else:  # if non spatial
           arg_policy = layers.fully_connected(self.state_representation,
               num_outputs=arg_type.sizes[0],
               activation_fn=tf.nn.softmax)
@@ -177,7 +177,7 @@ class A3CAgent(base_agent.BaseAgent):
 
 
   def reset(self):
-    # Epsilon schedule
+    # Epsilon schedule. first for functions, second for coords
     self.epsilon = [0.05, 0.2]
 
 
@@ -193,72 +193,42 @@ class A3CAgent(base_agent.BaseAgent):
     feed = {self.minimap: minimap,
             self.screen: screen,
             self.info: info}
-
-
-############### RAY'S CODE ################
-#       action_mask = np.zeros(len(FUNCTIONS), dtype=np.int32)
-#       action_mask[available_actions] = 1
-
-#     function_id_policy = self.sess.run(     # function_policy is non-spatial
-#         self.non_spatial_policy,
-#         feed_dict=feed_dict)
-
-#     function_id_policy *= action_mask
-#     function_ids = np.arange(len(function_id_policy))
-
-#     # renormalize distribution over function identifiers
-#     function_id_policy /= np.sum(function_id_policy)
-
-#       # sample function identifier
-#       action_id = np.random.choice(
-#           function_ids,
-#           p=np.squeeze(function_id_policy))
-############################################
-
+    
     # Select an action and a spatial target.
     valid_actions = np.zeros(self.isize, dtype=np.int32)
     valid_actions[obs.observation['available_actions']] = 1
     function_id_policy, spatial_policy = self.sess.run(
       [self.non_spatial_policy, self.spatial_policy],
       feed_dict=feed)
-
+    
+    self.logger.info(f"spatial_policy unraveled: {spatial_policy}")
     function_id_policy = function_id_policy.ravel()  # .ravel flattens the input into 1D array
     spatial_policy = spatial_policy.ravel()
+    self.logger.info(f"spatial_policy .raveled: {spatial_policy}")  # this will help with target below
     function_id_policy *= valid_actions
 
     function_ids = np.arange(len(function_id_policy))
-    function_id_policy /= np.sum(function_id_policy)  # is naming correct?
+    function_id_policy /= np.sum(function_id_policy) 
 #     act_id = valid_actions[np.argmax(non_spatial_policy[valid_actions])]
     act_id = np.random.choice(function_ids, p=np.squeeze(function_id_policy))
     target = np.argmax(spatial_policy) # ***
     target = [int(target // self.ssize), int(target % self.ssize)]  # not sure
 
-    if False:  # ???
+    if False:  
       self.logger.info(f"if false: {actions.FUNCTIONS[act_id].name, target}")
 
-    # Epsilon greedy exploration. This should be totally re-done
-#     if self.training and np.random.rand() < self.epsilon[0]: # choose action
-#       act_id = np.random.choice(valid_actions)
+    # Epsilon greedy exploration. Keeping this to see if it works
+    # basically, if eps greedy: take the target and move it left/right and up/down 4 px
     if self.training and np.random.rand() < self.epsilon[1]:
       dy = np.random.randint(-4, 5)
-      target[0] = int(max(0, min(self.ssize-1, target[0]+dy)))  # relates to target above
+      target[0] = int(max(0, min(self.ssize-1, target[0]+dy))) # make sure target is within possible pxl range
       dx = np.random.randint(-4, 5)
       target[1] = int(max(0, min(self.ssize-1, target[1]+dx)))
 
-#    # Set act_id and act_args
-    # act_args = []
-    # for arg in actions.FUNCTIONS[act_id].args: # spatial
-    #   # self.logger.info(f"ARG: {arg}")
-    #   if arg.name in ('screen', 'minimap', 'screen2'):
-        # act_args.append([target[1], target[0]])  # coords
-    #   else: # non-spatial
-    #     act_args.append([0])  # TODO: Be careful -- b/c just [0] (?)
-
     args = []
-    # trying to do w/ smaller movements. see if that helps at all
+    # args: A list of the types of args passed to function_type
     for arg in actions.FUNCTIONS[act_id].args:
       if arg.name in ('screen', 'minimap', 'screen2'):
-#       if arg.name in ('screen', 'minimap', 'screen2'):
           # x_policy = self.sess.run(
           #     self.argument_policy[str(arg) + "x"],
           #     feed_dict=feed)
@@ -284,12 +254,12 @@ class A3CAgent(base_agent.BaseAgent):
           arg_policy = np.squeeze(arg_policy)
           arg_ids = np.arange(len(arg_policy))
           arg_index = np.random.choice(arg_ids, p=arg_policy)
-          args.append([arg_index])  # can try this. not sure it will work
-          self.logger.info(f"arg: index: {arg_index}")  # not sure what this is... how to check? usually 0, 1. have seen up to 9
-#           args.append([actions.functions[arg_id].args])  # could also try these two
+          args.append([arg_index])  
+          self.logger.info(f"arg: index: {arg_index}") 
 #           args.append([0])
-
-    return actions.FunctionCall(act_id, args)  #  if i cant figure out, log fom pysc2 random agent -- what are args EXACTLY?
+    
+    # sizes: The max+1 of each of the dimensions this argument takes.
+    return actions.FunctionCall(act_id, args)  #  args should be int from (0, arg.size)
 
 
   def update(self, replay_buffer, discount, lr, counter):
@@ -357,6 +327,7 @@ class A3CAgent(base_agent.BaseAgent):
     minimaps = np.concatenate(minimaps, axis=0)
     screens = np.concatenate(screens, axis=0)
     infos = np.concatenate(infos, axis=0)
+    
     # Train
     feed = {self.minimap: minimaps,
             self.screen: screens,
@@ -366,8 +337,7 @@ class A3CAgent(base_agent.BaseAgent):
             self.spatial_action_selected: spatial_action_selected,
             self.valid_non_spatial_action: valid_non_spatial_action,
             self.non_spatial_action_selected: non_spatial_action_selected,
-            self.learning_rate: lr,
-            self.score: self.reward}  # will this work? -- doesnt seem like it
+            self.learning_rate: lr,} 
     _, summary = self.sess.run([self.train_op, self.summary_op], feed_dict=feed)
     self.summary_writer.add_summary(summary, counter)
 
