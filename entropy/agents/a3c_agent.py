@@ -98,8 +98,8 @@ class A3CAgent(base_agent.BaseAgent):
       action_log_prob = self.valid_spatial_action * spatial_action_log_prob + non_spatial_action_log_prob
       advantage = tf.stop_gradient(self.value_target - self.value)
       policy_loss = - tf.reduce_mean(action_log_prob * advantage)
-      value_loss = - tf.reduce_mean(self.value * advantage)
-      entropy = tf.reduce_sum(self.non_spatial_policy * tf.log(self.non_spatial_policy), name='entropy')
+      value_loss = tf.reduce_mean(self.value * advantage)
+      entropy_loss = tf.reduce_sum(self.non_spatial_policy * tf.log(self.non_spatial_policy), name='entropy')  # reduce_sum or mean?
       self.summary.append(tf.summary.scalar("Entropy", entropy))
 
       self.summary.append(tf.summary.scalar('policy_loss', policy_loss))
@@ -107,14 +107,12 @@ class A3CAgent(base_agent.BaseAgent):
 
       # TODO: policy penalty/entropy
       # loss = policy_loss + value_loss
-      loss = tf.add_n([
-        policy_loss, self.value_regularisation * value_loss, self.entropy_regularisation * entropy],
-        name="loss")
+      total_loss = policy_loss + (value_loss * self.value_regularisation) - (entropy_loss * self.entropy_regularisation)
       self.summary.append(tf.summary.scalar("total_loss", loss))
       # Build the optimizer
       self.learning_rate = tf.placeholder(tf.float32, None, name='learning_rate')
       opt = tf.train.RMSPropOptimizer(self.learning_rate, decay=0.99, epsilon=1e-10)
-      grads = opt.compute_gradients(loss)
+      grads = opt.compute_gradients(total_loss)
       cliped_grad = []
       for grad, var in grads:
         self.summary.append(tf.summary.histogram(var.op.name, var))
