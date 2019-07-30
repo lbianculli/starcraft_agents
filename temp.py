@@ -1,159 +1,210 @@
-import argparse
-from gailtf.baselines.common import set_global_seeds, tf_util as U
-import gym, logging, sys
-from gailtf.baselines import bench
-import os.path as osp
-from gailtf.baselines import logger
-from gailtf.dataset.mujoco import Mujoco_Dset
-from gailtf.dataset.sc2_dataset import SC2Dataset
-import numpy as np
-import ipdb
-from pysc2.env import sc2_env
-from absl import flags
-import sys
-from mpi4py import MPI
+#!/usr/bin/env python
 
+from pysc2.lib import features, point
+#from pysc2 import features, point
+from absl import app, flags
+from pysc2.env.environment import TimeStep, StepType
+from pysc2 import run_configs
+from s2clientprotocol import sc2api_pb2 as sc_pb
+from s2clientprotocol import common_pb2 as sc_common
+import ObserverAgent
+import importlib
+import glob
+from random import randint
+import pickle
+from multiprocessing import Process
+from tqdm import tqdm
+import math
+import random
+import numpy as np
+import multiprocessing
+import os
+
+# cpus = multiprocessing.cpu_count() # 16
+cpus = 8 # only use 8 cpu cores 
 
 FLAGS = flags.FLAGS
-FLAGS(sys.argv)
+flags.DEFINE_string("replays", "C:/Users/lbianculli/Documents/StarCraft II/Accounts/315460313/1-S2-1-7391955/Replays/Multiplayer/", "Path to the replay files.")
+flags.DEFINE_string("agent", "ObserverAgent.ObserverAgent", "Path to an agent.")
+flags.DEFINE_integer("procs", cpus, "Number of processes.", lower_bound=1)
+flags.DEFINE_integer("frames", 1000, "Frames per game.", lower_bound=1)
+flags.DEFINE_integer("start", 0, "Start at replay no.", lower_bound=0)
+flags.DEFINE_integer("batch", 16, "Size of replay batch for each process", lower_bound=1, upper_bound=512)
+# flags.mark_flag_as_required("replays")
+# flags.mark_flag_as_required("agent")
 
-def argsparser():
-    parser = argparse.ArgumentParser("Tensorflow Implementation of GAIL")
-    parser.add_argument("--gamma", help="discount rate", default=.99)
-    parser.add_argument("--step_mul", help="steps per second", default=8)
-    parser.add_argument("--map_name", help="name of map", default="Basic64")
-    parser.add_argument("--race", help="agent race", default="Terran")
-    parser.add_argument("--bot_race", help="opposing bot race", default="Terran")
-    parser.add_argument('--env_id', help='environment ID', default='sc2')
-    parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--num_cpu', help='number of cpu to used', type=int, default=1)
-    parser.add_argument('--expert_path', type=str, default='./expert_path/')
-    parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
-    parser.add_argument('--log_dir', help='the directory to save log file', default='log')
-    parser.add_argument('--load_model_path', help='if provided, load the model', type=str, default=None)
-    # Task
-    parser.add_argument('--task', type=str, choices=['train', 'evaluate'], default='train')
-    # for evaluatation
-    parser.add_argument('--stochastic_policy', type=bool, default=False)
-    #  Mujoco Dataset Configuration
-    parser.add_argument('--ret_threshold', help='the return threshold for the expert trajectories', type=int, default=0)
-    parser.add_argument('--traj_limitation', type=int, default=np.inf)
-    # Optimization Configuration
-    parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=4)
-    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=1)
-    # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=100)
-    parser.add_argument('--adversary_hidden_size', type=int, default=100)
-    # Algorithms Configuration
-    parser.add_argument('--algo', type=str, choices=['bc', 'trpo', 'ppo'], default='trpo')
-    parser.add_argument('--max_kl', type=float, default=0.02)
-    parser.add_argument('--policy_entcoeff', help='entropy coefficiency of policy', type=float, default=1e-2)
-    parser.add_argument('--adversary_entcoeff', help='entropy coefficiency of discriminator', type=float, default=1e-3)
-    # Traing Configuration
-    parser.add_argument('--save_per_iter', help='save model every xx iterations', type=int, default=100)
-    parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=1e9)
-    # Behavior Cloning
-    parser.add_argument('--pretrained', help='Use BC to pretrain', type=bool, default=False)
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=1e4)
-    return parser.parse_args()
+FILE_OP = None
 
-def get_task_name(args):
-    if args.algo == 'bc':
-        task_name = 'behavior_cloning.'
-        if args.traj_limitation != np.inf: task_name += "traj_limitation_%d."%args.traj_limitation
-        task_name += args.env_id.split("-")[0]
-    else:
-        import time
-        t = time.strftime("%c")
-        t = t.replace(' ','_')
-        t = t.replace(':','_')
-        task_name = args.algo + "_ppo_modify_available_action_gail." + t
-        if args.pretrained: task_name += "with_pretrained."
-        if args.traj_limitation != np.inf: task_name += "traj_limitation_%d."%args.traj_limitation
-        task_name += args.env_id.split("-")[0]
-        if args.ret_threshold > 0: task_name += ".return_threshold_%d" % args.ret_threshold
-        task_name = task_name + ".g_step_" + str(args.g_step) + ".d_step_" + str(args.d_step) + \
-                ".policy_entcoeff_" + str(args.policy_entcoeff) + ".adversary_entcoeff_" + str(args.adversary_entcoeff)
-    return task_name
+class Parser:
+    def __init__(self,
+                 replay_file_path,
+                 agent,
+                 player_id=1,
+                 screen_size_px=(64, 64), # (60, 60)
+                 minimap_size_px=(64, 64), # (60, 60)
+                 discount=1.,
+                 frames_per_game=1):
 
-def main(args):
-    from gailtf.baselines.ppo1 import mlp_policy
-    U.make_session(num_cpu=args.num_cpu).__enter__()
-    # set_global_seeds(args.seed)
-    # env = gym.make(args.env_id)
+        print("Parsing " + replay_file_path)
 
-    # MAP_USED = "'Ascension to Aiur LE'"
-    MAP_USED = args.map_name
-    # RACE_USED = "Terran"
-    RACE_USED = args.race
+        self.replay_file_name = replay_file_path.split("/")[-1].split(".")[0]
+        # print(f"replay_file_name: {self.replay_file_name}")
+        self.agent = agent
+        self.discount = discount
+        self.frames_per_game = frames_per_game
 
-    env = sc2_env.SC2Env(
-        map_name= args.map_name,
-        agent_race=args.race, #Terran
-        bot_race=args.bot_race,
-        difficulty=9, # 1
-        step_mul=args.step_mul,
-        screen_size_px=(32,32), # will change to (64,64)
-        minimap_size_px=(32,32),
-        visualize=False)
+        self.run_config = run_configs.get()
+        self.sc2_proc = self.run_config.start()
+        self.controller = self.sc2_proc.controller
 
-    def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
-            reuse=reuse, hid_size=524, num_hid_layers=2) # 600 > 524
-    # env = bench.Monitor(env, logger.get_dir() and
-    #     osp.join(logger.get_dir(), "monitor.json"))
-    # env.seed(args.seed)
-    # gym.logger.setLevel(logging.WARN)
-    task_name = get_task_name(args)
-    args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
-    args.log_dir = osp.join(args.log_dir, task_name)
-    # dataset = Mujoco_Dset(expert_path=args.expert_path, ret_threshold=args.ret_threshold, traj_limitation=args.traj_limitation)
-    dataset = SC2Dataset(expert_path=args.expert_path)
-    pretrained_weight = None
-    # if (args.pretrained and args.task == 'train') or args.algo == 'bc':
-    #     # Pretrain with behavior cloning
-    #     from gailtf.algo import behavior_clone
-    #     if args.algo == 'bc' and args.task == 'evaluate':
-    #         behavior_clone.evaluate(env, policy_fn, args.load_model_path, stochastic_policy=args.stochastic_policy)
-    #         sys.exit()
-    #     pretrained_weight = behavior_clone.learn(env, policy_fn, dataset,
-    #         max_iters=args.BC_max_iter, pretrained=args.pretrained,
-    #         ckpt_dir=args.checkpoint_dir, log_dir=args.log_dir, task_name=task_name)
-    #     if args.algo == 'bc':
-    #         sys.exit()
+        replay_data = self.run_config.replay_data(self.replay_file_name + '.SC2Replay')
+        ping = self.controller.ping()
+        self.info = self.controller.replay_info(replay_data)
+        # print(self.info)
+        if not self._valid_replay(self.info, ping):
+            self.sc2_proc.close()
+            # print(self.info)
+            raise Exception("{} is not a valid replay file!".format(self.replay_file_name + '.SC2Replay'))
 
-    from gailtf.network.adversary import TransitionClassifier
-    # discriminator
-    discriminator = TransitionClassifier(args.adversary_hidden_size, entcoeff=args.adversary_entcoeff)
-    if args.algo == 'trpo':
-        # Set up for MPI seed
-        rank = MPI.COMM_WORLD.Get_rank()
-        if rank != 0:
-            logger.set_level(logger.DISABLED)
-        workerseed = args.seed + 10000 * MPI.COMM_WORLD.Get_rank()
-        set_global_seeds(workerseed)
-        # env.seed(workerseed)
-        from gailtf.algo import trpo_mpi
-        if args.task == 'train':
-            trpo_mpi.learn(env, policy_fn, discriminator, dataset,
-                pretrained=args.pretrained, pretrained_weight=pretrained_weight,
-                g_step=args.g_step, d_step=args.d_step,
-                timesteps_per_batch=16,  # why not 8?
-                max_kl=args.max_kl, cg_iters=10, cg_damping=0.1,
-                max_timesteps=args.num_timesteps,
-                entcoeff=args.policy_entcoeff, gamma=args.gamma, lam=0.94,
-                vf_iters=3, vf_stepsize=5e-4,  # water those?!
-                ckpt_dir=args.checkpoint_dir, log_dir=args.log_dir,  # change these
-                save_per_iter=args.save_per_iter, load_model_path=args.load_model_path,  # and these?
-                task_name=task_name)
-        elif args.task == 'evaluate':
-            trpo_mpi.evaluate(env, policy_fn, args.checkpoint_dir, timesteps_per_batch=1024,
-                number_trajs=10, stochastic_policy=args.stochastic_policy)
-        else: raise NotImplementedError  # ???
-    else: raise NotImplementedError
+        # global FILE_OP
+        # FILE_OP.write(self.replay_file_name + '.SC2Replay')
 
-    env.close()
+        # self.replay_file_name = self.info.map_name+'_'+self.replay_file_name 
+        # for player_info in self.info.player_info:
+        #     race = sc_common.Race.Name(player_info.player_info.race_actual)
+        #     self.replay_file_name = race + '_' + self.replay_file_name
 
-if __name__ == '__main__':
-    args = argsparser()
-    main(args)
+
+        screen_size_px = point.Point(*screen_size_px)
+        minimap_size_px = point.Point(*minimap_size_px)
+        interface = sc_pb.InterfaceOptions(
+            raw=False, score=True,
+            feature_layer=sc_pb.SpatialCameraSetup(width=24))
+        screen_size_px.assign_to(interface.feature_layer.resolution)
+        minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)
+
+        map_data = None
+        if self.info.local_map_path:
+            map_data = self.run_config.map_data(self.info.local_map_path)
+
+        self._episode_length = self.info.game_duration_loops
+        self._episode_steps = 0
+
+        self.controller.start_replay(sc_pb.RequestStartReplay(
+            replay_data=replay_data,
+            map_data=map_data,
+            options=interface,
+            observed_player_id=player_id))
+
+        self._state = StepType.FIRST
+
+    @staticmethod
+    def _valid_replay(info, ping):
+        """Make sure the replay isn't corrupt, and is worth looking at."""
+        if (info.HasField("error") or
+                    info.base_build != ping.base_build or  # different game version
+                    info.game_duration_loops < 1000 or
+                    len(info.player_info) != 2):
+            # Probably corrupt, or just not interesting.
+            return False
+        for p in info.player_info:
+            if p.player_apm < 60 or (p.player_mmr != 0 and p.player_mmr < 2000):
+                return False
+
+        return True
+
+    def start(self):
+        _features = features.Features(self.controller.game_info())
+
+        frames = random.sample(np.arange(self.info.game_duration_loops).tolist(), self.info.game_duration_loops)
+        # frames = frames[0 : min(self.frames_per_game, self.info.game_duration_loops)]
+        step_mul = 10;
+        frames = frames[0:int(self.info.game_duration_loops)//step_mul]
+        frames.sort()
+
+        last_frame = 0
+        i = 0
+        # for frame in frames:
+        skips = step_mul
+        while i < self.info.game_duration_loops:
+            # skips = frame - last_frame
+            # last_frame = frame
+            i += skips
+            self.controller.step(skips)
+            obs = self.controller.observe()
+            agent_obs = _features.transform_obs(obs.observation)
+
+            if obs.player_result: # Episode over.
+                self._state = StepType.LAST
+                discount = 0
+            else:
+                discount = self.discount
+
+            self._episode_steps += skips
+
+            step = TimeStep(step_type=self._state, reward=0,
+                            discount=discount, observation=agent_obs)
+
+            self.agent.step(step, obs.actions, self.info, _features)
+
+            if obs.player_result:
+                break
+
+            self._state = StepType.MID
+
+        print("Saving data")
+        #print(self.agent.states)
+        pickle.dump({"info" : self.info, "state" : self.agent.states}, open("data/" + self.replay_file_name + ".p", "wb"))
+        print("Data successfully saved")
+        self.agent.states = []
+        print("Data flushed")
+
+        print("Done")
+
+def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):
+    for replay in replay_batch:
+        filename_without_suffix = os.path.splitext(os.path.basename(replay))[0]
+        filename = filename_without_suffix + ".p"
+        #print(filename)
+        if os.path.exists("data_full/"+filename):
+            #print('exists continue, ', filename)
+            continue
+
+        try:
+            parser = Parser(replay, agent_cls(), frames_per_game=frames_per_game)
+            parser.start()
+        except Exception as e:
+            print(e)
+
+def main(unused):
+    agent_module, agent_name = FLAGS.agent.rsplit(".", 1)
+    agent_cls = getattr(importlib.import_module(agent_module), agent_name)
+    print("agent loaded")
+    processes = FLAGS.procs
+    replay_folder = FLAGS.replays
+    frames_per_game = FLAGS.frames
+    batch_size = FLAGS.batch
+    replays = glob.glob(replay_folder + '*.SC2Replay')
+    print(replays)
+    start = FLAGS.start
+
+    for i in tqdm(range(math.ceil(len(replays)/processes/batch_size))):
+        procs = []
+        x = i * processes * batch_size
+        if x < start:
+            continue
+        for p in range(processes):
+            xp1 = x + p * batch_size
+            xp2 = xp1 + batch_size
+            xp2 = min(xp2, len(replays))
+            p = Process(target=parse_replay, args=(replays[xp1:xp2], agent_module, agent_cls, frames_per_game))
+            p.start()
+            procs.append(p)
+            if xp2 == len(replays):
+                break
+        for p in procs:
+            p.join()
+
+if __name__ == "__main__":
+    # FILE_OP= open("parsed.txt","w+")
+    app.run(main)
