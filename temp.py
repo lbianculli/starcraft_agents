@@ -12,12 +12,13 @@ import glob
 from random import randint
 import pickle
 from multiprocessing import Process
+import logging
 from tqdm import tqdm
 import math
 import random
 import numpy as np
 import multiprocessing
-import os
+import os`
 
 # cpus = multiprocessing.cpu_count() # 16
 cpus = 8 # only use 8 cpu cores
@@ -45,7 +46,8 @@ class Parser:
                  screen_size_px=(64, 64), # (60, 60)
                  minimap_size_px=(64, 64), # (60, 60)
                  discount=1.,
-                 frames_per_game=1):
+                 frames_per_game=1,
+                 logdir="./transform_replay_logs"):
 
         print("Parsing " + replay_file_path)
 
@@ -76,13 +78,11 @@ class Parser:
         #     self.replay_file_name = race + '_' + self.replay_file_name
 
 
-        # screen_size_px = point.Point(*screen_size_px)
-        # minimap_size_px = point.Point(*minimap_size_px)
-        agent_interface_format=features.AgentInterfaceFormat(
-            feature_dimensions=features.Dimensions(screen=FLAGS.screen_res, minimap=FLAGS.minimap_res),
-            use_feature_units=True)
-        # screen_size_px.assign_to(interface.feature_layer.resolution)
-        # minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)
+        self._init_logger(logdir)
+        # # screen_size_px = point.Point(*screen_size_px)
+        # # minimap_size_px = point.Point(*minimap_size_px)
+        # # screen_size_px.assign_to(interface.feature_layer.resolution)
+        # # minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)
 
         map_data = None
         if self.info.local_map_path:
@@ -91,6 +91,7 @@ class Parser:
         self._episode_length = self.info.game_duration_loops
         self._episode_steps = 0
 
+        # send request to API to start replay
         self.controller.start_replay(sc_pb.RequestStartReplay(
             replay_data=replay_data,
             map_data=map_data,
@@ -98,6 +99,7 @@ class Parser:
             observed_player_id=player_id))
 
         self._state = StepType.FIRST
+
 
     @staticmethod
     def _valid_replay(info, ping):
@@ -119,11 +121,21 @@ class Parser:
 
     def start(self):
         """ gets features and begins to run agent """
-        _features = features.Features(self.controller.game_info())
+        self.logger.info(f"GAME INFO: {self.controller.game_info()}")
+        self.logger.info(f"GAME INFO, INTERFACE: {self.controller.game_info().interface_options}")  # not sure if this will return
+
+        aif = features.AgentInterfaceFormat(
+                    feature_dimensions=features.Dimensions(screen=FLAGS.screen_res, minimap=FLAGS.minimap_res),
+                    use_feature_units=True)
+        map_size = (32, 32)
+
+        _features = features.Features(self.controller.game_info())  #*** error is right here
+        # _features = features.Features(agent_interface_format, map_size)
+        # Features class requires agent_interface_format, map_size. Could i not just hardcode that? Could be none to see what happens
 
         frames = random.sample(np.arange(self.info.game_duration_loops).tolist(), self.info.game_duration_loops)
         # frames = frames[0 : min(self.frames_per_game, self.info.game_duration_loops)]
-        step_mul = 10;
+        step_mul = 10;  # why is it 10, literally 3 different values in this thing
         frames = frames[0:int(self.info.game_duration_loops)//step_mul]
         frames.sort()
 
@@ -140,7 +152,7 @@ class Parser:
             agent_obs = _features.transform_obs(obs.observation)
 
             if obs.player_result: # Episode over.
-                self._state = StepType.LAST
+                self._state = StepType.LAST  # not sure where StepType comes from
                 discount = 0
             else:
                 discount = self.discount
@@ -150,23 +162,29 @@ class Parser:
             step = TimeStep(step_type=self._state, reward=0,
                             discount=discount, observation=agent_obs)
 
-            self.agent.step(step, obs.actions, self.info, _features)
-
+            self.agent.step(step, obs.actions, self.info, _features)  # pysc2_function_call = feat.reverse_action(a) -- only call w/in agent
             if obs.player_result:
                 break
 
             self._state = StepType.MID
 
-        print("Saving data")
         # save info, staets to pickle file
         pickle.dump({"info" : self.info, "state" : self.agent.states}, open("data/" + self.replay_file_name + ".p", "wb"))
-        print("Data successfully saved")
         self.agent.flush()
-        print("Data flushed")
+        self.logger.info("Data successfully saved and flushed")
 
-        print("Done")
+        self.logger.info("Done")
 
-def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):
+    def _init_logger(self, logdir):
+      self.logger = logging.getLogger(__name__)
+      self.logger.setLevel(logging.ERROR)
+      file_handler = logging.FileHandler(logdir)
+      file_handler.setLevel(logging.INFO)
+      formatter = logging.Formatter('%(levelname)s - %(message)s')
+      file_handler.setFormatter(formatter)
+      self.logger.addHandler(file_handler)
+
+def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):  # if i dont need agent_module, why is it here?
     """ Take replay(s) and an agent and try to parse them """
     for replay in replay_batch:
         filename_without_suffix = os.path.splitext(os.path.basename(replay))[0]
@@ -195,7 +213,7 @@ def main(unused):
     for (root, dirs, files) in os.walk(replay_folder, topdown=True):
       if len(files) > 0:
         replays = [root+"/"+replay for replay in files]
-    print(f"REPLAY: {replays[1]}")
+    self.logger.info(f"REPLAY: {replays[1]}")
 
     for i in tqdm(range(math.ceil(len(replays)/processes/batch_size))):
         procs = []
