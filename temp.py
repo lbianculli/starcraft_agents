@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 
-from pysc2.lib import features, point
+from pysc2.lib import features, point  # obj for coordinates
 #from pysc2 import features, point
 from absl import app, flags
 from pysc2.env.environment import TimeStep, StepType
 from pysc2 import run_configs
 from s2clientprotocol import sc2api_pb2 as sc_pb
 from s2clientprotocol import common_pb2 as sc_common
-import ObserverAgent
 import importlib
 import glob
 from random import randint
@@ -21,21 +20,24 @@ import multiprocessing
 import os
 
 # cpus = multiprocessing.cpu_count() # 16
-cpus = 8 # only use 8 cpu cores 
+cpus = 8 # only use 8 cpu cores
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string("replays", "C:/Users/lbianculli/Documents/StarCraft II/Accounts/315460313/1-S2-1-7391955/Replays/Multiplayer/", "Path to the replay files.")
-flags.DEFINE_string("agent", "ObserverAgent.ObserverAgent", "Path to an agent.")
+flags.DEFINE_string("replays", "C:/users/lbianculli/Documents/Replays/Multiplayer/", "Path to the replay files.")  # is this correct path?
+flags.DEFINE_string("agent", None, "Path to an agent.")
 flags.DEFINE_integer("procs", cpus, "Number of processes.", lower_bound=1)
 flags.DEFINE_integer("frames", 1000, "Frames per game.", lower_bound=1)
 flags.DEFINE_integer("start", 0, "Start at replay no.", lower_bound=0)
 flags.DEFINE_integer("batch", 16, "Size of replay batch for each process", lower_bound=1, upper_bound=512)
-# flags.mark_flag_as_required("replays")
-# flags.mark_flag_as_required("agent")
+flags.DEFINE_INTEGER("screen_res", "screen resolution in pixels", 32)
+flags.DEFINE_INTEGER("minimap_res", "minimap resolution in pixels", 32)
+flags.mark_flag_as_required("replays")
+flags.mark_flag_as_required("agent")
 
 FILE_OP = None
 
 class Parser:
+    """  """
     def __init__(self,
                  replay_file_path,
                  agent,
@@ -48,7 +50,6 @@ class Parser:
         print("Parsing " + replay_file_path)
 
         self.replay_file_name = replay_file_path.split("/")[-1].split(".")[0]
-        # print(f"replay_file_name: {self.replay_file_name}")
         self.agent = agent
         self.discount = discount
         self.frames_per_game = frames_per_game
@@ -69,19 +70,19 @@ class Parser:
         # global FILE_OP
         # FILE_OP.write(self.replay_file_name + '.SC2Replay')
 
-        # self.replay_file_name = self.info.map_name+'_'+self.replay_file_name 
+        # self.replay_file_name = self.info.map_name+'_'+self.replay_file_name
         # for player_info in self.info.player_info:
         #     race = sc_common.Race.Name(player_info.player_info.race_actual)
         #     self.replay_file_name = race + '_' + self.replay_file_name
 
 
-        screen_size_px = point.Point(*screen_size_px)
-        minimap_size_px = point.Point(*minimap_size_px)
-        interface = sc_pb.InterfaceOptions(
-            raw=False, score=True,
-            feature_layer=sc_pb.SpatialCameraSetup(width=24))
-        screen_size_px.assign_to(interface.feature_layer.resolution)
-        minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)
+        # screen_size_px = point.Point(*screen_size_px)
+        # minimap_size_px = point.Point(*minimap_size_px)
+        agent_interface_format=features.AgentInterfaceFormat(
+            feature_dimensions=features.Dimensions(screen=FLAGS.screen_res, minimap=FLAGS.minimap_res),
+            use_feature_units=True)
+        # screen_size_px.assign_to(interface.feature_layer.resolution)
+        # minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)
 
         map_data = None
         if self.info.local_map_path:
@@ -108,12 +109,16 @@ class Parser:
             # Probably corrupt, or just not interesting.
             return False
         for p in info.player_info:
+            # print(p.player_mmr)
             if p.player_apm < 60 or (p.player_mmr != 0 and p.player_mmr < 2000):
+                # Low APM = player just standing around.
+                # Low MMR = corrupt replay or player who is weak.
                 return False
 
         return True
 
     def start(self):
+        """ gets features and begins to run agent """
         _features = features.Features(self.controller.game_info())
 
         frames = random.sample(np.arange(self.info.game_duration_loops).tolist(), self.info.game_duration_loops)
@@ -153,20 +158,21 @@ class Parser:
             self._state = StepType.MID
 
         print("Saving data")
-        #print(self.agent.states)
+        # save info, staets to pickle file
         pickle.dump({"info" : self.info, "state" : self.agent.states}, open("data/" + self.replay_file_name + ".p", "wb"))
         print("Data successfully saved")
-        self.agent.states = []
+        self.agent.flush()
         print("Data flushed")
 
         print("Done")
 
 def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):
+    """ Take replay(s) and an agent and try to parse them """
     for replay in replay_batch:
         filename_without_suffix = os.path.splitext(os.path.basename(replay))[0]
         filename = filename_without_suffix + ".p"
         #print(filename)
-        if os.path.exists("data_full/"+filename):
+        if os.path.exists("data_full/"+filename):  # not sure what this is
             #print('exists continue, ', filename)
             continue
 
@@ -179,20 +185,24 @@ def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):
 def main(unused):
     agent_module, agent_name = FLAGS.agent.rsplit(".", 1)
     agent_cls = getattr(importlib.import_module(agent_module), agent_name)
-    print("agent loaded")
     processes = FLAGS.procs
     replay_folder = FLAGS.replays
     frames_per_game = FLAGS.frames
     batch_size = FLAGS.batch
-    replays = glob.glob(replay_folder + '*.SC2Replay')
-    print(replays)
     start = FLAGS.start
+
+    # replay_folder
+    for (root, dirs, files) in os.walk(replay_folder, topdown=True):
+      if len(files) > 0:
+        replays = [root+"/"+replay for replay in files]
+    print(f"REPLAY: {replays[1]}")
 
     for i in tqdm(range(math.ceil(len(replays)/processes/batch_size))):
         procs = []
         x = i * processes * batch_size
         if x < start:
             continue
+        # would an executor be better here possibly?
         for p in range(processes):
             xp1 = x + p * batch_size
             xp2 = xp1 + batch_size
