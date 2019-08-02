@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-
 from pysc2.lib import features, point  # obj for coordinates
-#from pysc2 import features, point
 from absl import app, flags
 from pysc2.env.environment import TimeStep, StepType
 from pysc2 import run_configs
+import ObserverAgent
 from s2clientprotocol import sc2api_pb2 as sc_pb
 from s2clientprotocol import common_pb2 as sc_common
 import importlib
@@ -18,24 +17,27 @@ import math
 import random
 import numpy as np
 import multiprocessing
-import os`
+import os
+import logging
+import sys
+import json
+
 
 # cpus = multiprocessing.cpu_count() # 16
-cpus = 8 # only use 8 cpu cores
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string("replays", "C:/users/lbianculli/Documents/Replays/Multiplayer/", "Path to the replay files.")  # is this correct path?
-flags.DEFINE_string("agent", None, "Path to an agent.")
-flags.DEFINE_integer("procs", cpus, "Number of processes.", lower_bound=1)
+flags.DEFINE_string("replays", "/home/lbianculli/StarCraftII/Replays", "Path to the replay files.")  # is this correct path?
+flags.DEFINE_string("agent", "ObserverAgent.ObserverAgent", "Path to an agent.")
+flags.DEFINE_integer("procs", 2, "Number of processes.", lower_bound=1)  # can i default at n-1?
 flags.DEFINE_integer("frames", 1000, "Frames per game.", lower_bound=1)
 flags.DEFINE_integer("start", 0, "Start at replay no.", lower_bound=0)
 flags.DEFINE_integer("batch", 16, "Size of replay batch for each process", lower_bound=1, upper_bound=512)
-flags.DEFINE_INTEGER("screen_res", "screen resolution in pixels", 32)
-flags.DEFINE_INTEGER("minimap_res", "minimap resolution in pixels", 32)
-flags.mark_flag_as_required("replays")
-flags.mark_flag_as_required("agent")
+flags.DEFINE_integer("screen_res", 32, "screen resolution in pixels")
+flags.DEFINE_integer("minimap_res", 32, "minimap resolution in pixels")
 
-FILE_OP = None
+
+FLAGS(sys.argv)
+assert FLAGS.screen_res == FLAGS.minimap_res
 
 class Parser:
     """  """
@@ -43,9 +45,9 @@ class Parser:
                  replay_file_path,
                  agent,
                  player_id=1,
-                 screen_size_px=(64, 64), # (60, 60)
-                 minimap_size_px=(64, 64), # (60, 60)
-                 discount=1.,
+                 screen_size_px=(32, 32), # (60, 60)
+                 minimap_size_px=(32, 32), # (60, 60)
+                 discount=.99,
                  frames_per_game=1,
                  logdir="./transform_replay_logs"):
 
@@ -67,15 +69,7 @@ class Parser:
         if not self._valid_replay(self.info, ping):
             self.sc2_proc.close()
             # print(self.info)
-            raise Exception("{} is not a valid replay file!".format(self.replay_file_name + '.SC2Replay'))
-
-        # global FILE_OP
-        # FILE_OP.write(self.replay_file_name + '.SC2Replay')
-
-        # self.replay_file_name = self.info.map_name+'_'+self.replay_file_name
-        # for player_info in self.info.player_info:
-        #     race = sc_common.Race.Name(player_info.player_info.race_actual)
-        #     self.replay_file_name = race + '_' + self.replay_file_name
+            raise Exception(f"{self.replay_file_name+".SC2Replay"} is not a valid replay file!")
 
 
         self._init_logger(logdir)
@@ -86,7 +80,7 @@ class Parser:
 
         map_data = None
         if self.info.local_map_path:
-            map_data = self.run_config.map_data(self.info.local_map_path)
+            map_data = self.run_config.map_data(self.info.local_map_path)  # could i use this?
 
         self._episode_length = self.info.game_duration_loops
         self._episode_steps = 0
@@ -109,12 +103,11 @@ class Parser:
                     info.game_duration_loops < 1000 or
                     len(info.player_info) != 2):
             # Probably corrupt, or just not interesting.
+            self.logger.ERROR("InvalidReplayError")  # has to be a more legit way to do this ***
             return False
         for p in info.player_info:
-            # print(p.player_mmr)
-            if p.player_apm < 60 or (p.player_mmr != 0 and p.player_mmr < 2000):
-                # Low APM = player just standing around.
-                # Low MMR = corrupt replay or player who is weak.
+            if p.player_apm < 80 or (p.player_mmr != 0 and p.player_mmr < 3000):
+
                 return False
 
         return True
@@ -122,16 +115,16 @@ class Parser:
     def start(self):
         """ gets features and begins to run agent """
         self.logger.info(f"GAME INFO: {self.controller.game_info()}")
-        self.logger.info(f"GAME INFO, INTERFACE: {self.controller.game_info().interface_options}")  # not sure if this will return
 
         aif = features.AgentInterfaceFormat(
                     feature_dimensions=features.Dimensions(screen=FLAGS.screen_res, minimap=FLAGS.minimap_res),
                     use_feature_units=True)
-        map_size = (32, 32)
 
-        _features = features.Features(self.controller.game_info())  #*** error is right here
-        # _features = features.Features(agent_interface_format, map_size)
+        map_size = (32,32)  # there has to be a way to do this in one line
+        map_size = point.Point(*map_size)
+
         # Features class requires agent_interface_format, map_size. Could i not just hardcode that? Could be none to see what happens
+        _features = features.Features(aif, map_size)
 
         frames = random.sample(np.arange(self.info.game_duration_loops).tolist(), self.info.game_duration_loops)
         # frames = frames[0 : min(self.frames_per_game, self.info.game_duration_loops)]
@@ -148,32 +141,12 @@ class Parser:
             # last_frame = frame
             i += skips
             self.controller.step(skips)
-            obs = self.controller.observe()
-            agent_obs = _features.transform_obs(obs.observation)
+            obs = self.controller.observe()  # is there anyway to get the obs then specifically check which replay it is?
+            with open("obs_test.p", "wb") as f:
+              pickle.dump(obs, f)
 
-            if obs.player_result: # Episode over.
-                self._state = StepType.LAST  # not sure where StepType comes from
-                discount = 0
-            else:
-                discount = self.discount
-
-            self._episode_steps += skips
-
-            step = TimeStep(step_type=self._state, reward=0,
-                            discount=discount, observation=agent_obs)
-
-            self.agent.step(step, obs.actions, self.info, _features)  # pysc2_function_call = feat.reverse_action(a) -- only call w/in agent
-            if obs.player_result:
-                break
-
-            self._state = StepType.MID
-
-        # save info, staets to pickle file
-        pickle.dump({"info" : self.info, "state" : self.agent.states}, open("data/" + self.replay_file_name + ".p", "wb"))
-        self.agent.flush()
-        self.logger.info("Data successfully saved and flushed")
-
-        self.logger.info("Done")
+            test = json.loads(obs)
+            self.logger.info(f"IF THIS WORKS IM MONEY? {obs.observation}")
 
     def _init_logger(self, logdir):
       self.logger = logging.getLogger(__name__)
@@ -213,7 +186,7 @@ def main(unused):
     for (root, dirs, files) in os.walk(replay_folder, topdown=True):
       if len(files) > 0:
         replays = [root+"/"+replay for replay in files]
-    self.logger.info(f"REPLAY: {replays[1]}")
+    # print(f"REPLAY: {replays[1]}")
 
     for i in tqdm(range(math.ceil(len(replays)/processes/batch_size))):
         procs = []
@@ -234,5 +207,5 @@ def main(unused):
             p.join()
 
 if __name__ == "__main__":
-    # FILE_OP= open("parsed.txt","w+")
+
     app.run(main)
