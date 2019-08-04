@@ -63,7 +63,7 @@ l2_classification = tf.layers.dense(input_to_classification, 1024, tf.nn.relu)
 classification_output = tf.layers.dense(l2_classification, 543)              # output layer
 loss = tf.losses.softmax_cross_entropy(onehot_labels=action_output, logits=classification_output)
 
-train_op = tf.train.GradientDescentOptimizer(0.001).minimize(loss)
+train_op = tf.train.AdamOptimizer(0.001).minimize(loss)
 tf.summary.scalar('loss', loss) # add loss to scalar summary
 
 accuracy = tf.metrics.accuracy(          # return (acc, update_op), and create 2 local variables
