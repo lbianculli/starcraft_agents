@@ -5,7 +5,15 @@ import pickle
 from google.protobuf.json_format import MessageToJson
 import json
 from pysc2.lib import actions
+import logging
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler("C:/Users/lbianculli/action_param_log", mode="w")
+file_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 
 class BatchGenerator(object):
@@ -39,18 +47,18 @@ class BatchGenerator(object):
 		loaded_replay_info_json = MessageToJson(replay_data['info'])
 		info_dict = json.loads(loaded_replay_info_json)
 
+		# get winner from json
 		winner_id = -1
-		for pi in info_dict['playerInfo']:
-			if pi['playerResult']['result'] == 'Victory':
-				winner_id = int(pi['playerResult']['playerId'])
+		for info in info_dict['playerInfo']:
+			if info['playerResult']['result'] == 'Victory':
+				winner_id = int(info['playerResult']['playerId'])
 				break
 
-		if winner_id == -1:
-			# 'Tie'
+		if winner_id == -1:  # if its a tie
 			replay_data = [] # release memory
 			return self.next_batch(get_action_id_only)
 
-		minimap_output = []
+		minimap_output = []  # set up lists for arrays
 		screen_output = []
 		action_output = []
 		player_info_output = []
@@ -61,14 +69,13 @@ class BatchGenerator(object):
 				continue
 
 			# player info
-			pi_temp = np.array(state['player'])
-			if pi_temp[0] != winner_id:
+			info_temp = np.array(state['player'])
+			if info_temp[0] != winner_id:
 				continue
 
-			# minimap
+			# minimap and screen temps
 			m_temp = np.array(state['minimap'])
-			m_temp = np.reshape(m_temp, [self.dimension,self.dimension,5])
-			# screen
+			m_temp = np.reshape(m_temp, [self.dimension, self.dimension,5])  # this is where shape error is originating
 			s_temp = np.array(state['screen'])
 			s_temp = np.reshape(s_temp, [self.dimension,self.dimension,10])
 			
@@ -78,11 +85,11 @@ class BatchGenerator(object):
 				if last_action == action:
 					continue
 
-				one_hot = np.zeros((1, 543)) # what is 543?
+				one_hot = np.zeros((1, 543)) # Not sure where 543 is from. Hardcoding for now
 				one_hot[np.arange(1), [action[0]]] = 1
 
 				for param in action[2]:
-					if param == [0]:
+					if param == [0]:  # seen this before. no_op i think
 						continue
 					minimap_output.append(m_temp)
 					screen_output.append(s_temp)
