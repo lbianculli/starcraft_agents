@@ -158,3 +158,5 @@ class BatchGenerator(object):
 					else:
 						return minimap_output, screen_output, action_output, player_info_output, self.arguments, self.argument_policy  
 			    # then need to handle in SL file
+
+				
