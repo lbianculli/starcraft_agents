@@ -1,172 +1,259 @@
+#!/usr/bin/env python
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+from pysc2.lib import features, point
+#from pysc2 import features, point
+from absl import app, flags
+from pysc2.env.environment import TimeStep, StepType
+from pysc2 import run_configs
+from s2clientprotocol import sc2api_pb2 as sc_pb
+from s2clientprotocol import common_pb2 as sc_common
+import ObserverAgent
+import importlib
+from random import randint
+import pickle
+from multiprocessing import Process
+from tqdm import tqdm
+import math
+import random
 import numpy as np
-import tensorflow as tf
-from pysc2.lib import actions
-from pysc2.lib import features
+import multiprocessing
+import os
+import sys
+import logging
 
 
-_MINIMAP_PLAYER_ID = features.MINIMAP_FEATURES.player_id.index
-_SCREEN_PLAYER_ID = features.SCREEN_FEATURES.player_id.index
-_SCREEN_UNIT_TYPE = features.SCREEN_FEATURES.unit_type.index
-_MINIMAP_FEATURES = 5
-_SCREEN_FEATURES = 8
+class Error(Exception):
+    """ Base class for exceptions in this module """
+    pass
 
 
-def preprocess_minimap(minimap):
-  layers = []
-  assert minimap.shape[0] == len(features.MINIMAP_FEATURES)
-  # assert minimap.shape[0] == _MINIMAP_FEATURES
+class ReplayError(Error):
+    def __init__(self, message):
+        super(ReplayError, self).__init__(message)
 
-  for i in range(len(features.MINIMAP_FEATURES)):
-  # for i in range(_MINIMAP_FEATURES):
-    if i == _MINIMAP_PLAYER_ID:                                               # if the feature is player_id
-      layers.append(minimap[i:i+1] / features.MINIMAP_FEATURES[i].scale)      # normalize
-    elif features.MINIMAP_FEATURES[i].type == features.FeatureType.SCALAR:    # it it's a scalar valued feature (other is categorical)
-      layers.append(minimap[i:i+1] / features.MINIMAP_FEATURES[i].scale)      # normalize -- why not put these in same line?
-    else:                                                                     # if categorical feature
-      layer = np.zeros([features.MINIMAP_FEATURES[i].scale,                   # create array of zeroes (scale, px1, px2)  --> ex: (17, 64, 64)
-        minimap.shape[1], minimap.shape[2]], dtype=np.float32)
-      for j in range(features.MINIMAP_FEATURES[i].scale):                     # for j in range of scale value (e.g: creep is 2)
-        indy, indx = (minimap[i] == j).nonzero()                              # where minimap corresponds to that value not being 0
-        layer[j, indy, indx] = 1                                              # encode that element in the tensor
-      layers.append(layer)
-  return np.concatenate(layers, axis=0)                                       # concat all layers (one for each feature)
+def _assert_compat_version(replay_path):
+    raise ReplayError(f"Version is incompatible: {replay_path+'.SC2Replay'}")
+
+def _assert_not_corrupt(replay_path):
+    raise ReplayError(f"Replay may be corrupt: {replay_path+'.SC2Replay'}")
+
+def _assert_useful(replay_path):
+    raise ReplayError(f"Replay not useful for learning purposes. Could be too short or low MMR: {replay_path+'.SC2Replay'}")
+
+def _assert_misc_error(replay_path):
+    raise ReplayError(f"Replay could not be loaded: {replay_path+'.SC2Replay'}")
 
 
-def preprocess_screen(screen):
-  layers = []
-  assert screen.shape[0] == len(features.SCREEN_FEATURES)
-  # assert screen.shape[0] == 8
+# cpus = multiprocessing.cpu_count() # 16
+cpus = 8
 
-  for i in range(len(features.SCREEN_FEATURES)):
-    if i == _SCREEN_PLAYER_ID or i == _SCREEN_UNIT_TYPE:
-      layers.append(screen[i:i+1] / features.SCREEN_FEATURES[i].scale)
-    elif features.SCREEN_FEATURES[i].type == features.FeatureType.SCALAR:
-      layers.append(screen[i:i+1] / features.SCREEN_FEATURES[i].scale)
-    else:
-      layer = np.zeros([features.SCREEN_FEATURES[i].scale, screen.shape[1], screen.shape[2]], dtype=np.float32)
-      for j in range(features.SCREEN_FEATURES[i].scale):
-        indy, indx = (screen[i] == j).nonzero()
-        layer[j, indy, indx] = 1
-      layers.append(layer)
-  return np.concatenate(layers, axis=0)
+FLAGS = flags.FLAGS
+flags.DEFINE_string("replays", "C:/Users/Program Files (x86)/StarCraft II/Replays/", "Path to the replay files.")
+flags.DEFINE_string("agent", "ObserverAgent.ObserverAgent", "Path to an agent.")
+flags.DEFINE_integer("procs", cpus, "Number of processes.", lower_bound=1)
+flags.DEFINE_integer("frames", 1000, "Frames per game.", lower_bound=1)
+flags.DEFINE_integer("start", 0, "Start at replay no.", lower_bound=0)
+flags.DEFINE_integer("batch", 16, "Size of replay batch for each process", lower_bound=1, upper_bound=512)
+flags.DEFINE_integer("screen_res", 64, "screen resolution in pixels")
+flags.DEFINE_integer("minimap_res", 64, "minimap resolution in pixels")
+# flags.mark_flag_as_required("replays")
+# flags.mark_flag_as_required("agent")
+FLAGS(sys.argv)
+FILE_OP = None
 
+class Parser:
+    def __init__(self,
+                 replay_file_path,
+                 agent,
+                 player_id=1,
+                 screen_size_px=(64, 64), # (60, 60)
+                 minimap_size_px=(64, 64), # (60, 60)
+                 discount=1.,
+                 frames_per_game=1,
+                 logdir="./transform_logger/"):
 
-def minimap_channel():
-  c = 0
-  for i in range(len(features.MINIMAP_FEATURES)):
-    if i == _MINIMAP_PLAYER_ID:
-      c += 1
-    elif features.MINIMAP_FEATURES[i].type == features.FeatureType.SCALAR:
-      c += 1
-    else:
-      c += features.MINIMAP_FEATURES[i].scale
-  return c
+        # print("Parsing " + replay_file_path)
 
+        self.replay_file_name = replay_file_path.split("/")[-1].split(".")[0]
+        # print(f"replay_file_name: {self.replay_file_name}")
+        self.agent = agent
+        self.discount = discount
+        self.frames_per_game = frames_per_game
 
-def screen_channel():
-  c = 0
-  for i in range(len(features.SCREEN_FEATURES)):
-    if i == _SCREEN_PLAYER_ID or i == _SCREEN_UNIT_TYPE:
-      c += 1
-    elif features.SCREEN_FEATURES[i].type == features.FeatureType.SCALAR:
-      c += 1
-    else:
-      c += features.SCREEN_FEATURES[i].scale
-  return c
+        self.run_config = run_configs.get()
+        self.sc2_proc = self.run_config.start()
+        self.controller = self.sc2_proc.controller
 
-
-def clean_dir(parent_path, verbose=True, excluded_paths=[]):
-    '''
-    Given a directory, through and deletes all files from the topdown
-    Can specify files to save as a list
-    '''
-    for (root, dirs, files) in os.walk(parent_path, topdown=True):
-        if len(files) > 0:
-            for file in files:
-                child_path = root + '/' +  file
-
-                if os.path.isfile(child_path) and child_path not in excluded_paths:
-                    os.unlink(child_path)
-                    if verbose:
-                        print(f'{child_path} deleted')
+        replay_data = self.run_config.replay_data(self.replay_file_name + '.SC2Replay')
+        ping = self.controller.ping()
+        self.info = self.controller.replay_info(replay_data)
+        # this could be done cleaner i think
+        if self._valid_replay(self.info, ping) == "version":
+            self.sc2_proc.close()
+            _assert_compat_version(self.replay_file_name)
+        if self._valid_replay(self.info, ping) == "corrupt":
+            self.sc2_proc.close()
+            _assert_not_corrupt(self.replay_file_name)
+        if self._valid_replay(self.info, ping) == "not_useful":
+            self.sc2_proc.close()
+            _assert_useful(self.replay_file_name)
 
 
-class SessionManager:
-  def __init__(self, sess=None, summary_writer=None, base_path="results/", ckpt_freq=100, training_enabled=True):
-    if not sess:
-      config = tf.ConfigProto()
-      config.allow_soft_placement = True
-      config.gpu_options.allow_growth = True
-      sess = tf.Session(config=config)
-    tf.keras.backend.set_session(sess)
+        screen_size_px = point.Point(*screen_size_px)
+        minimap_size_px = point.Point(*minimap_size_px)
+        interface = sc_pb.InterfaceOptions(
+            raw=False, score=True,
+            feature_layer=sc_pb.SpatialCameraSetup(width=64))
+        screen_size_px.assign_to(interface.feature_layer.resolution)
+        minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)  # this is working
 
-    self.sess = sess
-    self.base_path = base_path
-    self.ckpt_freq = ckpt_freq
-    self.training_enabled = training_enabled
-    self.global_step = tf.train.get_or_create_global_step()
-    if not summary_writer:
-      self.summary_writer = tf.summary.FileWriter(self.summaries_path)
+        map_data = None
+        if self.info.local_map_path:
+            map_data = self.run_config.map_data(self.info.local_map_path)
 
-  def restore_or_init(self):
-    """ creates saver, loads from checkpoint if one exists. otherwise setup graph """
-    self.saver = tf.train.Saver()
-    ckpt = tf.train.latest_checkpoint(self.checkpoint_path)  # ?
-    if ckpt:
-      self.saver.restore(self.sess, ckpt)
+        self._episode_length = self.info.game_duration_loops
+        self._episode_steps = 0
+        self._init_logger(logdir)
 
-      if self.training_enabled:
-        # merge with previous summary session -- will this let global step load as well?
-        self.summary_writer.add_session_log(  # not sure what these do?
-          tf.SessionLog(status=tf.SessionLog.START), self.sess.run(self.global_step))
+        self.controller.start_replay(sc_pb.RequestStartReplay(
+            replay_data=replay_data,
+            map_data=map_data,
+            options=interface,
+            observed_player_id=player_id))
 
-    else:
-      self.sess.run(tf.global_variables_initializer())
-    # this call locks the computational graph into read-only state,
-    # as a safety measure against memory leaks caused by mistakingly adding new ops to it
-    self.sess.graph.finalize()
+        self._state = StepType.FIRST
 
-  def run(self, tf_op, tf_inputs=None, inputs=None, feed_dict=None):
-    if feed_dict:
-      return self.sess.run(tf_op, feed_dict=feed_dict)
+    @staticmethod
+    def _valid_replay(info, ping):
+        """
+        Make sure the replay isn't corrupt, and is worth looking at.
+        Could I use the below logic to raise varying exceptions?
+        """
+        if info.HasField("error"):
+            return "corrupt"
+        if info.base_build != ping.base_build:
+            return "version"
+        if info.game_duration_loops < 1000 or len(info.player_info) != 2:
+            return "not_useful"
+        for p in info.player_info:
+            if p.player_apm < 60 or (p.player_mmr != 0 and p.player_mmr < 2000):
+                return "not_useful"
 
-    return self.sess.run(tf_op, feed_dict=dict(zip(tf_inputs, inputs)))  # pretty handy
+        return True
 
-  # def on_update(self, step):
-  #   """ saves checkpoint if appropriate """
-  #   if not self.ckpt_freq or not self.training_enabled or step % self.ckpt_freq:
-  #     return
-  #   self.saver.save(self.sess, self.checkpoint_path + "/.ckpt", global_step=step)
+    def _init_logger(self, logdir):
+      self.logger = logging.getLogger(__name__)
+      self.logger.setLevel(logging.INFO)
+      file_handler = logging.FileHandler(logdir)
+      file_handler.setLevel(logging.INFO)
+      formatter = logging.Formatter('%(levelname)s - %(message)s')
+      file_handler.setFormatter(formatter)
+      self.logger.addHandler(file_handler)
 
-  def _save(self, path=None, count=None):
-    self.saver.save(self.sess, path+'/model.pkl', count)  # note: episode count
+    def start(self):
+        # self.logger.info(f"GAME INFO: {self.controller.game_info()}\n")
 
-  def add_summaries(self, tag, value, prefix='', step=None):
-    if not self.training_enabled:
-      return
-    summary = self.create_summary(prefix + "/" + tag, value)
-    self.summary_writer.add_summary(summary, global_step=step)
+        aif = features.AgentInterfaceFormat(
+                    feature_dimensions=features.Dimensions(screen=FLAGS.screen_res, minimap=FLAGS.minimap_res),
+                    use_feature_units=True)
+        map_size = (64, 64)
+        map_size = point.Point(*map_size)
+        # _features = features.Features(self.controller.game_info())  game info not returning info needed
+        _features = features.Features(aif, map_size)
 
-  @staticmethod  # remember: staticmethod is ...
-  def create_summary(tag, value):  # not sure any of this
-    """ creates summary """
-    return tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value)])
+        frames = random.sample(np.arange(self.info.game_duration_loops).tolist(), self.info.game_duration_loops)
+        # frames = frames[0 : min(self.frames_per_game, self.info.game_duration_loops)]
+        step_mul = 10;
+        frames = frames[0:int(self.info.game_duration_loops)//step_mul]
+        frames.sort()
 
-  @property # remember: property .... is used for...
-  def start_step(self):
-    if self.training_enabled:
-      return self.global_step.eval(session=self.sess)
-    return 0
+        last_frame = 0
+        i = 0
+        # for frame in frames:
+        skips = step_mul
+        while i < self.info.game_duration_loops:
 
-  @property
-  def summaries_path(self):
-    return self.base_path + "/summaries"
+            # skips = frame - last_fram
+            # last_frame = frame
+            i += skips
+            self.controller.step(skips)
+            obs = self.controller.observe()  # error here
 
-  @property
-  def checkpoint_path(self):
-    return self.base_path + "/checkpoints"
+            agent_obs = _features.transform_obs(obs) # error here. no attribute observation
+            # print("_features working")
+
+            if obs.player_result: # Episode over.
+                self._state = StepType.LAST
+                discount = 0
+            else:
+                discount = self.discount
+
+            self._episode_steps += skips
+
+            step = TimeStep(step_type=self._state, reward=0,
+                            discount=discount, observation=agent_obs)
+
+            self.agent.step(step, obs.actions, self.info, _features)
+            if obs.player_result:
+                break
+
+            self._state = StepType.MID
+
+        save_path = "C:/Users/lbianculli/agent_replay_data/"+self.replay_file_name+".p"
+        with open(save_path, "wb") as f:
+            pickle.dump({"info" : self.info, "state" : self.agent.states}, f)
+
+        self.agent.flush()
+        self.logger.info("Data successfully saved and flushed")
+
+def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):
+    for replay in replay_batch:
+        filename_without_suffix = os.path.splitext(os.path.basename(replay))[0]
+        filename = filename_without_suffix + ".p"
+        #print(filename)
+        if os.path.exists("data_full/"+filename):
+            #print('exists continue, ', filename)
+            continue
+
+        try:
+            parser = Parser(replay, agent_cls(), frames_per_game=frames_per_game)
+            parser.start()
+        except ReplayError as e:
+            print(e)
+
+def main(unused):
+    agent_module, agent_name = FLAGS.agent.rsplit(".", 1)
+    agent_cls = getattr(importlib.import_module(agent_module), agent_name)
+    processes = FLAGS.procs
+    replay_folder = FLAGS.replays
+    frames_per_game = FLAGS.frames
+    batch_size = FLAGS.batch
+    for (root, dirs, files) in os.walk(replay_folder, topdown=True):
+      if len(files) > 0:
+        replays = [root+"/"+replay for replay in files]
+        print(f"REPLAY: {replays[1]}")  # all good thru here
+    start = FLAGS.start
+    try:
+        for i in tqdm(range(math.ceil(len(replays)/processes/batch_size))):
+            procs = []
+            x = i * processes * batch_size
+            if x < start:
+                continue
+            for p in range(processes):
+                xp1 = x + p * batch_size
+                xp2 = xp1 + batch_size
+                xp2 = min(xp2, len(replays))
+                # print(replays[xp1])  # seems like still good up to here
+                p = Process(target=parse_replay, args=(replays[xp1:xp2], agent_module, agent_cls, frames_per_game))
+                p.start()
+                procs.append(p)
+                if xp2 == len(replays):
+                    break
+            for p in procs:
+                p.join()
+    except Exception as e:
+        print(e)
+
+if __name__ == "__main__":
+    # FILE_OP= open("parsed.txt","w+")
+    app.run(main)
