@@ -15,6 +15,9 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
+SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]
+MINIMAP_TYPES = [actions.TYPES[1]]
+
 class BatchGenerator(object):
 	def __init__(self):
 		self.home_dir = "C:/Users/lbianculli"
@@ -98,50 +101,50 @@ class BatchGenerator(object):
 					player_info_output.append(pi_temp)
 # 					ground_truth_coordinates.append(np.array(param))  # would need to introduce some handling he. to what extent?
 
-				  if len(param) > 1:
+					if len(param) > 1:
 				    # handle for non-spatial actions
 				    if arg_type in SCREEN_TYPES:
-					units = self.screen_dimensions  # 64
+							units = self.screen_dimensions  # 64
 				    elif arg_type in MINIMAP_TYPES:
-					units = self.minimap_dimensions  # 64
+							units = self.minimap_dimensions  # 64
 
-				    arg_policy_x = tf.layers.dense(
-					inputs=self.state_representation,
-					units=units[0],
-					activation=tf.nn.softmax)
+				    arg_policy_x = tf.layers.dense(  # policy outputs are main thing i still need to take care of in next file
+							inputs=self.state_representation,
+							units=units[0],
+							activation=tf.nn.softmax)
 
 				    arg_policy_y = tf.layers.dense(
-					inputs=self.state_representation,
-					units=units[1],
-					activation=tf.nn.softmax)
+							inputs=self.state_representation,
+							units=units[1],
+							activation=tf.nn.softmax)
 
 				    self.argument_policy[str(arg_type) + "x"] = arg_policy_x
 				    self.argument_policy[str(arg_type) + "y"] = arg_policy_y
 
 				    arg_placeholder_x = tf.placeholder(
-					tf.float32,
-					shape=[None, units[0]])
+							tf.float32,
+							shape=[None, units[0]])
 
 				    arg_placeholder_y = tf.placeholder(
-					tf.float32,
-					shape=[None, units[1]])
+							tf.float32,
+							shape=[None, units[1]])
 
 				    self.arguments[str(arg_type) + "x"] = arg_placeholder_x
 				    self.arguments[str(arg_type) + "y"] = arg_placeholder_y
 
-				else:
-				  arg_policy = tf.layers.dense(
-				      inputs=self.state_representation,
-				      units=arg_type.sizes[0],
-				      activation=tf.nn.softmax)
+					else:
+						arg_policy = tf.layers.dense(
+								inputs=self.state_representation,
+								units=arg_type.sizes[0],
+								activation=tf.nn.softmax)
 
-				  self.argument_policy[str(arg_type)] = arg_policy
+						self.argument_policy[str(arg_type)] = arg_policy
 
-				  arg_placeholder = tf.placeholder(
-				      tf.float32,
-				      shape=[None, arg_type.sizes[0]])
+						arg_placeholder = tf.placeholder(
+								tf.float32,
+								shape=[None, arg_type.sizes[0]])
 
-				  self.arguments[str(arg_type)] = arg_placeholder
+						self.arguments[str(arg_type)] = arg_placeholder
 
 
 					assert(len(minimap_output) == len(ground_truth_coordinates))
@@ -172,9 +175,6 @@ import utils as U
 from pysc2.lib import actions
 import tensorflow.contrib.layers as layers
 
-
-SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]
-MINIMAP_TYPES = [actions.TYPES[1]]
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -250,23 +250,65 @@ merge_op = tf.summary.merge_all() # operation to merge all summary
 bg = BatchGenerator()
 print("Beginning training session")
 for step in range(250):                             # train
-    m,s,u,a =  bg.next_batch(get_action_id_only=True)
-    _, loss_, result = sess.run([train_op, loss, merge_op],
-        {minimap: m, 
-        screen: s, 
-        info:u,
-        action_output: a})
-    writer.add_summary(result, step)
+	m,s,u,a,y =  bg.next_batch(get_action_id_only=True)
+	feed_dict = {minimap: m, 
+			screen: s, 
+			info:u,
+			action_output: a}
+	logger.info(f"action_output: {action_output}") # will help me get a better idea of how to reconcile the below code
+	logger.info(f"batch_generator action: {a}")
+	
+	# ----------------------------------------------------------
+	# something like below. what would need to change?
+	net_args = self.arguments
+	batch_size = len(arg_types)
 
-    if step % 50 == 0:
-        accuracy_ = sess.run([accuracy],
-            {minimap: m, 
-            screen: s, 
-            info:u,
-            action_output: a})
-        print('Step:', step, '| train loss: ', loss_, '| test accuracy: ', accuracy_)
+	# first populate feed_dict with zero arrays
+	for arg_type in sc2_actions.TYPES:
+		if len(arg_type.sizes) > 1:
+			if arg_type in SCREEN_TYPES:
+				x_size = feature_screen_size[0]  # all these are 64
+				y_size = feature_screen_size[1]
+			elif arg_type in MINIMAP_TYPES:
+				x_size = feature_minimap_size[0]
+				y_size = feature_minimap_size[1]
 
-    print('---------------------------------------------------')
+			feed_dict[net_args[str(arg_type) + "x"]] = np.zeros(  # feed_dict["ph_name"]["arg_typex"]
+					(batch_size, x_size))
+			feed_dict[net_args[str(arg_type) + "y"]] = np.zeros(
+					(batch_size, y_size))
+
+			else:
+				feed_dict[net_args[str(arg_type)]] = np.zeros(
+						(batch_size, arg_type.sizes[0]))
+
+	# then one_hot encode args  *** do i need this?
+# 	for step in range(batch_size):
+# 		for i, arg_type in enumerate(arg_types[step]):
+# 			if len(arg_type.sizes) > 1:
+# 				arg_key_x = net_args[str(arg_type) + "x"]
+# 				feed_dict[arg_key_x][step, args[step][i][0]] = 1
+
+# 				arg_key_y = net_args[str(arg_type) + "x"]
+# 				feed_dict[arg_key_y][step, args[step][i][1]] = 1
+# 			else:
+# 				arg_key = net_args[str(arg_type)]
+# 				feed_dict[arg_key][step, args[step][i][0]] = 1
+
+# ---------------------------------------------------------
+
+	_, loss_, result = sess.run([train_op, loss, merge_op], feed_dict=feed_dict)
+	writer.add_summary(result, step)
+
+	if step % 50 == 0:
+		accuracy_ = sess.run([accuracy],
+				{minimap: m, 
+				screen: s, 
+				info:u,
+				action_output: a})
+		print('Step:', step, '| train loss: ', loss_, '| test accuracy: ', accuracy_)
+
+	print('---------------------------------------------------')
 
 saver.save(sess, './params', write_meta_graph=False)  # meta_graph is not recommended
 
