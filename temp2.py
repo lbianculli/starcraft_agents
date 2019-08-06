@@ -97,63 +97,64 @@ class BatchGenerator(object):
 					action_output.append(one_hot[0])
 					player_info_output.append(pi_temp)
 # 					ground_truth_coordinates.append(np.array(param))  # would need to introduce some handling he. to what extent?
-          if len(param) > 1:
-            # handle for non-spatial actions
-            if arg_type in SCREEN_TYPES:
-                units = self.screen_dimensions  # 64
-            elif arg_type in MINIMAP_TYPES:
-                units = self.minimap_dimensions  # 64
-                
-            arg_policy_x = tf.layers.dense(
-                inputs=self.state_representation,
-                units=units[0],
-                activation=tf.nn.softmax)
 
-            arg_policy_y = tf.layers.dense(
-                inputs=self.state_representation,
-                units=units[1],
-                activation=tf.nn.softmax)
+				  if len(param) > 1:
+				    # handle for non-spatial actions
+				    if arg_type in SCREEN_TYPES:
+					units = self.screen_dimensions  # 64
+				    elif arg_type in MINIMAP_TYPES:
+					units = self.minimap_dimensions  # 64
 
-            self.argument_policy[str(arg_type) + "x"] = arg_policy_x
-            self.argument_policy[str(arg_type) + "y"] = arg_policy_y
+				    arg_policy_x = tf.layers.dense(
+					inputs=self.state_representation,
+					units=units[0],
+					activation=tf.nn.softmax)
 
-            arg_placeholder_x = tf.placeholder(
-                tf.float32,
-                shape=[None, units[0]])
+				    arg_policy_y = tf.layers.dense(
+					inputs=self.state_representation,
+					units=units[1],
+					activation=tf.nn.softmax)
 
-            arg_placeholder_y = tf.placeholder(
-                tf.float32,
-                shape=[None, units[1]])
+				    self.argument_policy[str(arg_type) + "x"] = arg_policy_x
+				    self.argument_policy[str(arg_type) + "y"] = arg_policy_y
 
-            self.arguments[str(arg_type) + "x"] = arg_placeholder_x
-            self.arguments[str(arg_type) + "y"] = arg_placeholder_y
+				    arg_placeholder_x = tf.placeholder(
+					tf.float32,
+					shape=[None, units[0]])
 
-        else:
-          arg_policy = tf.layers.dense(
-              inputs=self.state_representation,
-              units=arg_type.sizes[0],
-              activation=tf.nn.softmax)
+				    arg_placeholder_y = tf.placeholder(
+					tf.float32,
+					shape=[None, units[1]])
 
-          self.argument_policy[str(arg_type)] = arg_policy
+				    self.arguments[str(arg_type) + "x"] = arg_placeholder_x
+				    self.arguments[str(arg_type) + "y"] = arg_placeholder_y
 
-          arg_placeholder = tf.placeholder(
-              tf.float32,
-              shape=[None, arg_type.sizes[0]])
+				else:
+				  arg_policy = tf.layers.dense(
+				      inputs=self.state_representation,
+				      units=arg_type.sizes[0],
+				      activation=tf.nn.softmax)
 
-          self.arguments[str(arg_type)] = arg_placeholder
-        
+				  self.argument_policy[str(arg_type)] = arg_policy
 
-		assert(len(minimap_output) == len(ground_truth_coordinates))
+				  arg_placeholder = tf.placeholder(
+				      tf.float32,
+				      shape=[None, arg_type.sizes[0]])
 
-		if len(minimap_output) == 0:
-			# The replay file only record one person's operation, so if it is 
-			# the defeated person, we need to skip the replay file
-			return self.next_batch(get_action_id_only)
+				  self.arguments[str(arg_type)] = arg_placeholder
 
-		if get_action_id_only:
-			return minimap_output, screen_output, player_info_output, action_output
-# 		else:
-# 			return minimap_output, screen_output, action_output, player_info_output, ground_truth_coordinates
-		else:
-			return minimap_output, screen_output, action_output, player_info_output, self.arguments, self.argument_policy  
-    # then need to handle in SL file
+
+					assert(len(minimap_output) == len(ground_truth_coordinates))
+
+					if len(minimap_output) == 0:
+						# The replay file only record one person's operation, so if it is 
+						# the defeated person, we need to skip the replay file
+						return self.next_batch(get_action_id_only)
+
+					if get_action_id_only:
+						return minimap_output, screen_output, player_info_output, action_output
+			# 		else:
+			# 			return minimap_output, screen_output, action_output, player_info_output, ground_truth_coordinates
+					else:
+						return minimap_output, screen_output, action_output, player_info_output, self.arguments, self.argument_policy  
+			    # then need to handle in SL file
