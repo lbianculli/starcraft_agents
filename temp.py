@@ -52,7 +52,7 @@ else:
 
     self.arguments[str(arg_type)] = arg_placeholder
 
------------------------------------------------------
+# -----------------------------------------------------
 ### from agent
 # def get_batch(self, terminal) ...
         feed_dict = {self.network.screen_features: screen,
