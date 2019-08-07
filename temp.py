@@ -1,259 +1,213 @@
-#!/usr/bin/env python
-
-from pysc2.lib import features, point
-#from pysc2 import features, point
-from absl import app, flags
-from pysc2.env.environment import TimeStep, StepType
-from pysc2 import run_configs
-from s2clientprotocol import sc2api_pb2 as sc_pb
-from s2clientprotocol import common_pb2 as sc_common
-import ObserverAgent
-import importlib
-from random import randint
-import pickle
-from multiprocessing import Process
-from tqdm import tqdm
-import math
-import random
-import numpy as np
-import multiprocessing
 import os
-import sys
+import pickle
+import json
 import logging
+import numpy as np
+import utils as U
+import tensorflow.contrib.layers as layers
+
+from google.protobuf.json_format import MessageToJson
+from pysc2.lib import actions
 
 
-class Error(Exception):
-    """ Base class for exceptions in this module """
-    pass
+SCREEN_TYPES = [actions.TYPES[0], actions.TYPES[2]]
+MINIMAP_TYPES = [actions.TYPES[1]]
 
 
-class ReplayError(Error):
-    def __init__(self, message):
-        super(ReplayError, self).__init__(message)
+class SupervisedParam(object):
+  def __init__(self, isize=11, ssize=64, msize=64, parsed_dir='/home/lbianculli/agent_replay_data/'):
 
-def _assert_compat_version(replay_path):
-    raise ReplayError(f"Version is incompatible: {replay_path+'.SC2Replay'}")
+    self.parsed_dir = parsed_dir
+    self.isize = isize
+    self.msize = msize
+    self.ssize = ssize
+    self.parsed_filenames = os.listdir(self.parsed_dir)  # list of pickled replays
+    self.next_index = 0
 
-def _assert_not_corrupt(replay_path):
-    raise ReplayError(f"Replay may be corrupt: {replay_path+'.SC2Replay'}")
+    self._init_logger(dir="./action_param_log")
 
-def _assert_useful(replay_path):
-    raise ReplayError(f"Replay not useful for learning purposes. Could be too short or low MMR: {replay_path+'.SC2Replay'}")
+    config = tf.ConfigProto(allow_soft_placement=True)
+    config.gpu_options.allow_growth = True
+    self.sess = tf.Session(config=config)
 
-def _assert_misc_error(replay_path):
-    raise ReplayError(f"Replay could not be loaded: {replay_path+'.SC2Replay'}")
+    self.build_net()
+    self.build_opt()
 
+  # every batch corresponding to 1 replay file ***
+  def get_batch(self, get_action_id_only=False):
+    """
+    Loads pickled replay data. Returns screen, minimap, actions, player info and coords for SL step
+    """
+    full_filename = self.parsed_dir + self.parsed_filenames[self.next_index]  # single replay path
 
-# cpus = multiprocessing.cpu_count() # 16
-cpus = 8
+    while os.path.getsize(full_filename) == 0:  # this cant be the best way
+      del self.parsed_filenames[self.next_index]
+      full_filename = self.parsed_dir+self.parsed_filenames[self.next_index]
+      if self.next_index >= len(self.parsed_filenames):
+        self.next_index = 0
 
-FLAGS = flags.FLAGS
-flags.DEFINE_string("replays", "C:/Users/Program Files (x86)/StarCraft II/Replays/", "Path to the replay files.")
-flags.DEFINE_string("agent", "ObserverAgent.ObserverAgent", "Path to an agent.")
-flags.DEFINE_integer("procs", cpus, "Number of processes.", lower_bound=1)
-flags.DEFINE_integer("frames", 1000, "Frames per game.", lower_bound=1)
-flags.DEFINE_integer("start", 0, "Start at replay no.", lower_bound=0)
-flags.DEFINE_integer("batch", 16, "Size of replay batch for each process", lower_bound=1, upper_bound=512)
-flags.DEFINE_integer("screen_res", 64, "screen resolution in pixels")
-flags.DEFINE_integer("minimap_res", 64, "minimap resolution in pixels")
-# flags.mark_flag_as_required("replays")
-# flags.mark_flag_as_required("agent")
-FLAGS(sys.argv)
-FILE_OP = None
+    self.next_index += 1
+    if self.next_index == len(self.parsed_filenames):
+      self.next_index = 0
 
-class Parser:
-    def __init__(self,
-                 replay_file_path,
-                 agent,
-                 player_id=1,
-                 screen_size_px=(64, 64), # (60, 60)
-                 minimap_size_px=(64, 64), # (60, 60)
-                 discount=1.,
-                 frames_per_game=1,
-                 logdir="./transform_logger/"):
-
-        # print("Parsing " + replay_file_path)
-
-        self.replay_file_name = replay_file_path.split("/")[-1].split(".")[0]
-        # print(f"replay_file_name: {self.replay_file_name}")
-        self.agent = agent
-        self.discount = discount
-        self.frames_per_game = frames_per_game
-
-        self.run_config = run_configs.get()
-        self.sc2_proc = self.run_config.start()
-        self.controller = self.sc2_proc.controller
-
-        replay_data = self.run_config.replay_data(self.replay_file_name + '.SC2Replay')
-        ping = self.controller.ping()
-        self.info = self.controller.replay_info(replay_data)
-        # this could be done cleaner i think
-        if self._valid_replay(self.info, ping) == "version":
-            self.sc2_proc.close()
-            _assert_compat_version(self.replay_file_name)
-        if self._valid_replay(self.info, ping) == "corrupt":
-            self.sc2_proc.close()
-            _assert_not_corrupt(self.replay_file_name)
-        if self._valid_replay(self.info, ping) == "not_useful":
-            self.sc2_proc.close()
-            _assert_useful(self.replay_file_name)
-
-
-        screen_size_px = point.Point(*screen_size_px)
-        minimap_size_px = point.Point(*minimap_size_px)
-        interface = sc_pb.InterfaceOptions(
-            raw=False, score=True,
-            feature_layer=sc_pb.SpatialCameraSetup(width=64))
-        screen_size_px.assign_to(interface.feature_layer.resolution)
-        minimap_size_px.assign_to(interface.feature_layer.minimap_resolution)  # this is working
-
-        map_data = None
-        if self.info.local_map_path:
-            map_data = self.run_config.map_data(self.info.local_map_path)
-
-        self._episode_length = self.info.game_duration_loops
-        self._episode_steps = 0
-        self._init_logger(logdir)
-
-        self.controller.start_replay(sc_pb.RequestStartReplay(
-            replay_data=replay_data,
-            map_data=map_data,
-            options=interface,
-            observed_player_id=player_id))
-
-        self._state = StepType.FIRST
-
-    @staticmethod
-    def _valid_replay(info, ping):
-        """
-        Make sure the replay isn't corrupt, and is worth looking at.
-        Could I use the below logic to raise varying exceptions?
-        """
-        if info.HasField("error"):
-            return "corrupt"
-        if info.base_build != ping.base_build:
-            return "version"
-        if info.game_duration_loops < 1000 or len(info.player_info) != 2:
-            return "not_useful"
-        for p in info.player_info:
-            if p.player_apm < 60 or (p.player_mmr != 0 and p.player_mmr < 2000):
-                return "not_useful"
-
-        return True
-
-    def _init_logger(self, logdir):
-      self.logger = logging.getLogger(__name__)
-      self.logger.setLevel(logging.INFO)
-      file_handler = logging.FileHandler(logdir)
-      file_handler.setLevel(logging.INFO)
-      formatter = logging.Formatter('%(levelname)s - %(message)s')
-      file_handler.setFormatter(formatter)
-      self.logger.addHandler(file_handler)
-
-    def start(self):
-        # self.logger.info(f"GAME INFO: {self.controller.game_info()}\n")
-
-        aif = features.AgentInterfaceFormat(
-                    feature_dimensions=features.Dimensions(screen=FLAGS.screen_res, minimap=FLAGS.minimap_res),
-                    use_feature_units=True)
-        map_size = (64, 64)
-        map_size = point.Point(*map_size)
-        # _features = features.Features(self.controller.game_info())  game info not returning info needed
-        _features = features.Features(aif, map_size)
-
-        frames = random.sample(np.arange(self.info.game_duration_loops).tolist(), self.info.game_duration_loops)
-        # frames = frames[0 : min(self.frames_per_game, self.info.game_duration_loops)]
-        step_mul = 10;
-        frames = frames[0:int(self.info.game_duration_loops)//step_mul]
-        frames.sort()
-
-        last_frame = 0
-        i = 0
-        # for frame in frames:
-        skips = step_mul
-        while i < self.info.game_duration_loops:
-
-            # skips = frame - last_fram
-            # last_frame = frame
-            i += skips
-            self.controller.step(skips)
-            obs = self.controller.observe()  # error here
-
-            agent_obs = _features.transform_obs(obs) # error here. no attribute observation
-            # print("_features working")
-
-            if obs.player_result: # Episode over.
-                self._state = StepType.LAST
-                discount = 0
-            else:
-                discount = self.discount
-
-            self._episode_steps += skips
-
-            step = TimeStep(step_type=self._state, reward=0,
-                            discount=discount, observation=agent_obs)
-
-            self.agent.step(step, obs.actions, self.info, _features)
-            if obs.player_result:
-                break
-
-            self._state = StepType.MID
-
-        save_path = "C:/Users/lbianculli/agent_replay_data/"+self.replay_file_name+".p"
-        with open(save_path, "wb") as f:
-            pickle.dump({"info" : self.info, "state" : self.agent.states}, f)
-
-        self.agent.flush()
-        self.logger.info("Data successfully saved and flushed")
-
-def parse_replay(replay_batch, agent_module, agent_cls, frames_per_game):
-    for replay in replay_batch:
-        filename_without_suffix = os.path.splitext(os.path.basename(replay))[0]
-        filename = filename_without_suffix + ".p"
-        #print(filename)
-        if os.path.exists("data_full/"+filename):
-            #print('exists continue, ', filename)
-            continue
-
-        try:
-            parser = Parser(replay, agent_cls(), frames_per_game=frames_per_game)
-            parser.start()
-        except ReplayError as e:
-            print(e)
-
-def main(unused):
-    agent_module, agent_name = FLAGS.agent.rsplit(".", 1)
-    agent_cls = getattr(importlib.import_module(agent_module), agent_name)
-    processes = FLAGS.procs
-    replay_folder = FLAGS.replays
-    frames_per_game = FLAGS.frames
-    batch_size = FLAGS.batch
-    for (root, dirs, files) in os.walk(replay_folder, topdown=True):
-      if len(files) > 0:
-        replays = [root+"/"+replay for replay in files]
-        print(f"REPLAY: {replays[1]}")  # all good thru here
-    start = FLAGS.start
     try:
-        for i in tqdm(range(math.ceil(len(replays)/processes/batch_size))):
-            procs = []
-            x = i * processes * batch_size
-            if x < start:
-                continue
-            for p in range(processes):
-                xp1 = x + p * batch_size
-                xp2 = xp1 + batch_size
-                xp2 = min(xp2, len(replays))
-                # print(replays[xp1])  # seems like still good up to here
-                p = Process(target=parse_replay, args=(replays[xp1:xp2], agent_module, agent_cls, frames_per_game))
-                p.start()
-                procs.append(p)
-                if xp2 == len(replays):
-                    break
-            for p in procs:
-                p.join()
-    except Exception as e:
-        print(e)
+      replay_data = pickle.load(open(full_filename, "rb"))
+    except:
+      self.logger.info(f"Skipping replay: {full_filename}")
+      return self.get_batch(get_action_id_only)
 
-if __name__ == "__main__":
-    # FILE_OP= open("parsed.txt","w+")
-    app.run(main)
+    loaded_replay_info_json = MessageToJson(replay_data['info'])
+    info_dict = json.loads(loaded_replay_info_json)
+
+    # get winner from json
+    winner_id = -1
+    for info in info_dict['playerInfo']:
+      if info['playerResult']['result'] == 'Victory':
+        winner_id = int(info['playerResult']['playerId'])
+        break
+
+    if winner_id == -1:  # if its a tie
+      replay_data = [] # release memory
+      return self.get_batch(get_action_id_only)
+
+    minimap_output = []  # set up lists for arrays
+    screen_output = []
+    action_output = []
+    player_info_output = []
+    ground_truth_coordinates = []
+
+    for state in replay_data['state']:
+      if state['actions'] == []:
+        continue
+
+      # player info
+      info_temp = np.array(state['player'])
+      if info_temp[0] != winner_id:
+        continue
+
+      # minimap and screen temps
+      m_temp = np.array(state['feature_minimap'], dtype=np.float32)
+      m_temp = np.expand_dims(U.preprocess_minimap(m_temp), axis=0)  # will throw error unless parsed at same size
+      s_temp = np.array(state['feature_screen'], dtype=np.float32)
+      s_temp = np.expand_dims(U.preprocess_screen(s_temp), axis=0)
+
+      # one-hot action_id
+      last_action = None
+      for action in state['actions']:
+        if last_action == action:
+          continue
+
+        one_hot = np.zeros((1, 543)) # Not sure where 543 is from. Hardcoding for now
+        one_hot[np.arange(1), [action[0]]] = 1
+
+        for param in action[2]:
+          if param == [0]:  # seen this before. no_op i think
+            continue
+          minimap_output.append(m_temp)
+          screen_output.append(s_temp)
+          action_output.append(one_hot[0])
+          player_info_output.append(pi_temp)
+          ground_truth_coordinates.append(np.array(param))  # handling would begin here.
+
+    assert(len(minimap_output) == len(ground_truth_coordinates))
+
+    if len(minimap_output) == 0:
+      # The replay file only record one person's operation, so if it is
+      # the defeated person, we need to skip the replay file
+      return self.get_batch(get_action_id_only)
+
+    if get_action_id_only:
+      return minimap_output, screen_output, player_info_output, action_output
+    else:
+      return minimap_output, screen_output, action_output, player_info_output, ground_truth_coordinates
+
+
+  def build_net(self):
+    self.score = tf.placeholder(tf.int32, [], name='score')  # do i need?
+    self.minimap = tf.placeholder(tf.float32, [None, U.minimap_channel(), self.msize, self.msize], name='minimap')  # 17, 64, 64
+    self.screen = tf.placeholder(tf.float32, [None, U.screen_channel(), self.ssize, self.ssize], name='screen')
+    self.info = tf.placeholder(tf.float32, [None, self.isize], name='info')
+
+    self.action_output = tf.placeholder(tf.float32, [None, 543]) # one hot
+
+    # set up network ** still need to change some of these
+    screen_filters1 = tf.get_variable(name='sf1', shape=(5, 5, U.screen_channel(), 16))  # hwio
+    screen_filters2 = tf.get_variable(name='sf2',shape=(3, 3, 16, 32))
+    minimap_filters1 = tf.get_variable(name='mmf1',shape=(5, 5, U.minimap_channel(), 16))
+    minimap_filters2 = tf.get_variable(name='mmf2',shape=(3, 3, 16, 32))
+
+    mconv1 = tf.nn.conv2d(tf.transpose(minimap, [0, 2, 3, 1]), minimap_filters1, strides=[1, 1, 1, 1], padding='SAME', name='mconv1')
+    mconv2 = tf.nn.conv2d(mconv1, minimap_filters2, strides=[1, 1, 1, 1], padding='SAME', name='mconv2')
+    sconv1 = tf.nn.conv2d(tf.transpose(screen, [0, 2, 3, 1]), screen_filters1, strides=[1, 1, 1, 1], padding='SAME', name='sconv1')
+    sconv2 = tf.nn.conv2d(sconv1, screen_filters2, strides=[1, 1, 1, 1], padding='SAME', name='sconv2')
+    info_fc = layers.fully_connected(layers.flatten(info), num_outputs=256, activation_fn=tf.tanh, scope='info_fc')
+
+    flat_screen = tf.reshape(sconv2, [-1, 16*16*32])
+    dense_screen = tf.layers.dense(inputs=flat_screen, units=1024, activation=tf.nn.relu)
+    self.screen_output = tf.layers.dense(dense_screen, 256)
+
+    flat_minimap = tf.reshape(mconv2, [-1, 16*16*32])
+    dense_minimap = tf.layers.dense(inputs=flat_minimap, units=1024, activation=tf.nn.leaky_relu)
+    self.minimap_output = tf.layers.dense(dense_minimap, 64)
+
+    self.saver = tf.train.Saver() # define a saver for saving and restoring
+    self.writer = tf.summary.FileWriter('./action_and_id_log', self.sess.graph)     # write to file
+    self.merge_op = tf.summary.merge_all() # operation to merge all summary
+
+  def build_opt(self):
+    l1_user_info = tf.layers.dense(self.info, self.isize, tf.tanh)
+    user_info_output = tf.layers.dense(l1_user_info, 5)
+
+    # regression, NOT SURE IF THIS IS suitable regression (?)
+    input_to_classification = tf.concat([self.minimap_output, self.screen_output, user_info_output], 1)  # state rep? this shits a mess
+    l2_classification = tf.layers.dense(input_to_classification, 1024, tf.nn.relu)
+    classification_output = tf.layers.dense(l2_classification, 543)              # output layer
+    self.loss = tf.losses.softmax_cross_entropy(onehot_labels=self.action_output, logits=classification_output)
+
+    self.train_op = tf.train.AdamOptimizer(0.001).minimize(loss)
+    tf.summary.scalar('loss', loss)
+
+    self.accuracy = tf.metrics.accuracy(       # creates local vars (?)
+        labels=tf.argmax(self.action_output, axis=1), predictions=tf.argmax(classification_output, axis=1),)[1]
+
+    # should this be here?
+    init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()) # the local var is for accuracy_op
+    self.sess.run(init_op) # initialize var in graph
+    self.opt_op()  # could put this here for now. Once batchsize is a thing this will have to go elsewhere
+
+  def opt_op(self):
+    print("Beginning training session")
+    for step in range(250):
+        m,s,u,a,params =  self.get_batch(get_action_id_only=True)
+        self.logger.info(f"minimap: {m}")
+        self.logger.info(f"len(minimap): {len(m)}")
+        feed_dict = {
+            self.minimap: m,
+            self.screen: s,
+            self.info:u,
+            self.action_output: a}
+        # param handling if need be
+        # have to handle writer and saver shit too.... check out baselines.utils they had a clean way  ***
+        _, loss_, result = self.sess.run([self.train_op, self.loss, self.merge_op], feed_dict=feed_dict)
+        self.writer.add_summary(result, step)
+
+        if step % 50 == 0:
+            accuracy_ = self.sess.run([self.accuracy],
+                {self.minimap: m,
+                self.screen: s,
+                self.info:u,
+                self.action_output: a})
+            print('Step:', step, '| train loss: ', loss_, '| test accuracy: ', accuracy_)
+
+
+    self.saver.save(sess, './params', write_meta_graph=False)  # meta_graph is not recommended
+
+  def _init_logger(self, dir):
+    self.logger = logging.getLogger(__name__)
+    self.logger.setLevel(logging.INFO)
+    file_handler = logging.FileHandler(dir, mode="w")
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    self.logger.addHandler(file_handler)
+
