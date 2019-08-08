@@ -1,95 +1,49 @@
-#!/usr/bin/env python
-# this agent is for geting states and actions from replays
-
-import pickle
 import numpy as np
-import math
-
-from pysc2.lib import actions as sc_action
-from pysc2.lib import static_data
-from pysc2.lib import features
-from pysc2.lib import actions
-from pysc2.lib import static_data
-
-FUNCTIONS = actions.FUNCTIONS
-
-class ObserverAgent():
-
-    def __init__(self):
-        self.states = []
-
-    def step(self, time_step, actions, info, feat):
-        # print(actions)
-        state = {}
-
-        state["minimap"] = [
-            time_step.observation["feature_minimap"][0] / 255,                  # height_map
-            time_step.observation["feature_minimap"][1] / 2,                    # visibility
-            time_step.observation["feature_minimap"][2],                        # creep
-            time_step.observation["feature_minimap"][3],                        # camera
-            (time_step.observation["feature_minimap"][5] == 1).astype(int),       # own_units
-            (time_step.observation["feature_minimap"][5] == 3).astype(int),       # neutral_units
-            (time_step.observation["feature_minimap"][5] == 4).astype(int),       # enemy_units
-            time_step.observation["feature_minimap"][6]                         # selected
-        ]
-
-        unit_type = time_step.observation["feature_screen"][6]
-        unit_type_compressed = np.zeros(unit_type.shape, dtype=np.float)
-        for y in range(len(unit_type)):
-            for x in range(len(unit_type[y])):
-                if unit_type[y][x] > 0 and unit_type[y][x] in static_data.UNIT_TYPES:
-                    unit_type_compressed[y][x] = static_data.UNIT_TYPES.index(unit_type[y][x]) / len(static_data.UNIT_TYPES)
-
-        hit_points = time_step.observation["screen"][8]
-        hit_points_logged = np.zeros(hit_points.shape, dtype=np.float)
-        for y in range(len(hit_points)):
-            for x in range(len(hit_points[y])):
-                if hit_points[y][x] > 0:
-                    hit_points_logged[y][x] = math.log(hit_points[y][x]) / 4  # what is the idea behind this?
-
-        state["screen"] = [
-            time_step.observation["feature_screen"][0] / 255,               # height_map
-            time_step.observation["feature_screen"][1] / 2,                 # visibility
-            time_step.observation["feature_screen"][2],                     # creep
-            time_step.observation["feature_screen"][3],                     # power
-            (time_step.observation["feature_screen"][5] == 1).astype(int),  # own_units
-            (time_step.observation["feature_screen"][5] == 3).astype(int),  # neutral_units
-            (time_step.observation["feature_screen"][5] == 4).astype(int),  # enemy_units
-            unit_type_compressed,                                   # unit_type
-            time_step.observation["feature_screen"][7],                     # selected
-            hit_points_logged,                                      # hit_points
-            time_step.observation["feature_screen"][9] / 255,               # energy
-            time_step.observation["feature_screen"][10] / 255,              # shields
-            time_step.observation["feature_screen"][11]                     # unit_density
-        ]
-
-        # Binary encoding of available actions
-        '''
-        state["game_loop"] = time_step.observation["game_loop"]
-        '''
-        state["player"] = time_step.observation["player"]
-
-        state["available_actions"] = np.zeros(len(sc_action.FUNCTIONS))
-        for i in time_step.observation["available_actions"]:
-            state["available_actions"][i] = 1.0
-
-        transformed_actions = []
-        for a in actions:
-            try:
-                pysc2_function_call = feat.reverse_action(a)
-                func_id = pysc2_function_call.function
-                func_name = FUNCTIONS[func_id].name
-                func_args = pysc2_function_call.arguments
-                transformed_actions.append([func_id, func_name, func_args])
-            except:
-                pass
-                print(e)
-
-        state["actions"] = transformed_actions
-
-        # state["actions"] = actions
-        self.states.append(state)
+import tensorflow as tf
+from tensorflow.keras import Model
+from tensorflow.keras.initializers import VarianceScaling
+from tensorflow.keras.layers import Input, Concatenate, Dense, Embedding, Conv2D, Flatten, Lambda
+from my_layers import Squeeze, Split, Transpose, Log, Broadcast2D
 
 
-    def flush(self):
-      self.states = []
+def build_fully_conv(obs_spec, act_spec, data_format="channels_first", broadcast_non_spatial=False, fc_dim=256):
+
+
+
+
+
+def spatial_block(name, space, cfg):
+  inpt = Input(space.shape, name=name + "_input")
+  block = Split(space.shape[0], axis=1)(inpt)
+
+  for i, (name, dim) in enumerate(zip(space.spatial_feats, space.spatial_dims)):  # what are these? Need to find where these are called
+    if dim > 1:
+      block[i] = Squeeze(axis=1)(block[i])
+      block[i] = Embedding(input_dim=dim, output_dim=10)(block[i])
+      # [N, H, W, C] -> [N, C, H, W]
+      block[i] = Transpose([0, 3, 1, 2])(block[i])
+    else:
+      block[i] = Log()(block[i])  # looks familiar
+
+  block = Concatenate(axis=1)(block)
+  block = Conv2D(16, 5, **cfg)(block)
+  block = Conv2D(32, 3, **cfg)(block)
+
+  return block, inpt
+
+
+
+def conv_cfg(data_format='channels_first', activation=None, scale=1.0):
+  return dict(
+      padding='same',
+      activation=activation,
+      data_format=data_format,
+      kernel_initializer=VarianceScaling(scale=2.0*scale)  # what's VarianceScaling?
+  )
+
+
+def dense_cfg(activation=None, scale=1.0):
+  return dict(
+      activation=activation,
+      kernel_initializer=VarianceScaling(scale=2.0*scale)
+  )
