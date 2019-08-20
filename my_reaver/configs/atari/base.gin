@@ -1,0 +1,45 @@
+# params for generic actor-critic:
+# ==========================================
+build_cnn_nature.value_separate = False
+build_cnn_nature.obs_shift = True
+build_cnn_nature.obs_scale = True
+
+ACAgent.model_fn = @build_cnn_nature
+ACAgent.policy_cls = @MultiPolicy
+
+ACAgent.optimizer = @tf.train.AdamOptimizer()
+tf.train.AdamOptimizer.learning_rate = @tf.train.polynomial_decay()
+tf.train.polynomial_decay.decay_steps = 20000
+tf.train.polynomial_decay.learning_rate = 0.00025
+tf.train.polynomial_decay.end_learning_rate = 0.0
+tf.train.polynomial_decay.global_step = @tf.train.get_global_step()
+
+ACAgent.value_coef = 0.5
+ACAgent.entropy_coef = 0.005
+
+ACAgent.batch_sz = 32
+ACAgent.traj_len = 16
+
+ACAgent.discount = 0.99
+ACAgent.gae_lambda = 0.0
+
+ACAgent.clip_rewards = 1.0
+ACAgent.clip_grads_norm = 40.0
+
+ACAgent.normalize_advantages = False
+
+# params for A2C:
+# ==========================================
+# ...
+
+# params for PPO:
+# ==========================================
+PPOAgent.batch_sz = 128
+PPOAgent.traj_len = 16
+
+PPOAgent.gae_lambda = 0.95
+
+PPOAgent.n_epochs = 3
+PPOAgent.minibatch_sz = 512
+PPOAgent.clip_ratio = 0.2
+PPOAgent.clip_value = 0.0
