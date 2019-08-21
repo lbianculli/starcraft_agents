@@ -35,6 +35,10 @@ from utils.tensorflow import SessionManager
 from utils.typing import ModelBuilder, PolicyType
 from agents.base import SyncRunningAgent, ActorCriticAgent, DEFAULTS
 
+try:
+    from mpi4py import MPI
+except ImportError:
+    MPI = None
 
 # extract_observation() can be replaced by obs_wrapper functionality
 """
@@ -130,7 +134,91 @@ class TRPOAgent(SyncRunningAgent, ActorCriticAgent):
             t += 1
 
 
+# def add_vtarg_and_adv(seg, gamma, lam):  # dont think I need I alreay can calculate these 
 
+def learn(*,
+        network,
+        env,
+        total_timesteps,
+        timesteps_per_batch=1024, # what to train on
+        max_kl=0.001,
+        cg_iters=10,
+        gamma=0.99,
+        lam=1.0, # advantage estimation
+        seed=None,
+        ent_coef=0.0,
+        cg_damping=1e-2,
+        vf_stepsize=3e-4,
+        vf_iters=3,
+        max_episodes=0, max_iters=0,  # time constraint
+        callback=None,
+        load_path=None,
+        **network_kwargs
+        ):
+    '''
+    learn a policy function with TRPO algorithm
+    Parameters:
+    ----------
+    network                 neural network to learn. Can be either string ('mlp', 'cnn', 'lstm', 'lnlstm' for basic types)
+                            or function that takes input placeholder and returns tuple (output, None) for feedforward nets
+                            or (output, (state_placeholder, state_output, mask_placeholder)) for recurrent nets 
+    env                     environment (one of the gym environments or wrapped via baselines.common.vec_env.VecEnv-type class
+    timesteps_per_batch     timesteps per gradient estimation batch
+    max_kl                  max KL divergence between old policy and new policy ( KL(pi_old || pi) )
+    ent_coef                coefficient of policy entropy term in the optimization objective
+    cg_iters                number of iterations of conjugate gradient algorithm
+    cg_damping              conjugate gradient damping
+    vf_stepsize             learning rate for adam optimizer used to optimie value function loss
+    vf_iters                number of iterations of value function optimization iterations per each policy optimization step
+    total_timesteps           max number of timesteps
+    max_episodes            max number of episodes
+    max_iters               maximum number of policy optimization iterations
+    callback                function to be called with (locals(), globals()) each policy optimization step
+    load_path               str, path to load the model from (default: None, i.e. no model is loaded)
+    **network_kwargs        keyword arguments to the policy / network builder. See baselines.common/policies.py/build_policy and arguments to a particular type of network
+    Returns:
+    -------
+    learnt model
+    '''
+    if MPI is not None:  # still dont know what mpi is
+        nworkers = MPI.COMM_WORLD.Get_size()
+        rank = MPI.COMM_WORLD.Get_rank()
+    else:
+        nworkers = 1
+        rank = 0
+        
+    config=tf.ConfigProto(
+                allow_soft_placement=True,
+                inter_op_parallelism_threads=cpus_per_worker,
+                intra_op_parallelism_threads=cpus_per_worker)
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config) 
+    
+    ops_spec = env.obs_spec()
+    act_spec = env.act_spec()
+    
+    #1 get two policies("old" and "new")
+    #2 get kl for old_policy - new_policy
+    #3 get entropy of new policy
+    #4 kl = tf.reduce_mean(kl)
+    #5 mean_ent = tf.reduce_mean(entropy)
+    #6 entropy = mean_ent * entropy_coef
+    #7 get value function (vf)
+    #8 vferr = tf.reduce_mean(tf.square(vf - ret))  # in baselines file ret is a placeholder
+    #9 ratio = tf.exp(new_policy.logprob(action) - old_policy.logprob(action))  # advantage * pnew / pold
+    #10 surrgain = tf.reduce_mean(ratio * atarg)  # atarg is ph for advantage
+    
+    
+    
 
-
-
+    
+###
+    def kl(self, other):
+        a0 = self.logits - tf.reduce_max(self.logits, axis=-1, keepdims=True)
+        a1 = other.logits - tf.reduce_max(other.logits, axis=-1, keepdims=True)
+        ea0 = tf.exp(a0)
+        ea1 = tf.exp(a1)
+        z0 = tf.reduce_sum(ea0, axis=-1, keepdims=True)
+        z1 = tf.reduce_sum(ea1, axis=-1, keepdims=True)
+        p0 = ea0 / z0
+        return tf.reduce_sum(p0 * (a0 - tf.log(z0) - a1 + tf.log(z1)), axis=-1)
