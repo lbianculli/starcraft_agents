@@ -1,124 +1,136 @@
-'''
-The code is used to train BC imitator, or pretrained GAIL imitator. ~ Baselines BC file
-'''
+from gailtf.baselines.common import explained_variance, zipsame, dataset, Dataset, fmt_row
+from gailtf.baselines import logger
+import gailtf.baselines.common.tf_util as U
+import tensorflow as tf, numpy as np
+import time, os
+from gailtf.baselines.common import colorize
+from mpi4py import MPI
+from collections import deque
+from gailtf.baselines.common.mpi_adam import MpiAdam
+from gailtf.baselines.common.cg import cg
+from contextlib import contextmanager
+from gailtf.common.statistics import stats
+import ipdb
+from pysc2 import maps
+from pysc2.env import available_actions_printer
+from pysc2.env import sc2_env
+from pysc2.lib import stopwatch
 
-import argparse
-import tempfile
-import os.path as osp
-import gym
-import logging
-from tqdm import tqdm
+from pysc2.lib import actions as sc_action
+from pysc2.lib import static_data
+from pysc2.lib import features
+from pysc2.lib import FUNCTIONS
+from gym import spaces
 
+from gailtf.baselines.common.mpi_moments import mpi_moments
+
+import math
+
+import gin.tf
 import tensorflow as tf
 
-from baselines.gail import mlp_policy
-from baselines import bench
-from baselines import logger
-from baselines.common import set_global_seeds, tf_util as U
-from baselines.common.misc_util import boolean_flag
-from baselines.common.mpi_adam import MpiAdam
-from baselines.gail.run_mujoco import runner
-from baselines.gail.dataset.mujoco_dset import Mujoco_Dset
+from envs.base import Spec
+from utils import StreamLogger
+from utils.tensorflow import SessionManager
+from utils.typing import ModelBuilder, PolicyType
+from agents.base import SyncRunningAgent, ActorCriticAgent, DEFAULTS
 
 
-def argsparser():
-    parser = argparse.ArgumentParser("Tensorflow Implementation of Behavior Cloning")
-    parser.add_argument('--env_id', help='environment ID', default='Hopper-v1')
-    parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='data/deterministic.trpo.Hopper.0.00.npz')
-    parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
-    parser.add_argument('--log_dir', help='the directory to save log file', default='log')
-    #  Mujoco Dataset Configuration
-    parser.add_argument('--traj_limitation', type=int, default=-1)
-    # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=100)
-    # for evaluatation
-    boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
-    boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=1e5)
-    return parser.parse_args()
+# extract_observation() can be replaced by obs_wrapper functionality
+"""
+1. Collect set of s,a pairs with Q value estimates
+2. Construct estimated objective and constraint
+3. solve optimization to update theta
+"""
 
 
-def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
-          adam_epsilon=1e-5, optim_stepsize=3e-4,
-          ckpt_dir=None, log_dir=None, task_name=None,
-          verbose=False):
+@gin.configurable('TRPOAgent')
+class TRPOAgent(SyncRunningAgent, ActorCriticAgent):
+    def __init__(
+        self,
+        obs_spec: Spec,
+        act_spec: Spec,
+        model_fn: ModelBuilder=None,
+        policy_cls: PolicyType=None,
+        sess_mgr: SessionManager=None,
+        optimizer: tf.train.Optimizer=None,
+        n_envs=4,
+        value_coef=DEFAULTS['value_coef'],
+        entropy_coef=DEFAULTS['entropy_coef'],
+        traj_len=DEFAULTS['traj_len'],
+        batch_sz=DEFAULTS['batch_sz'],
+        discount=DEFAULTS['discount'],
+        gae_lambda=DEFAULTS['gae_lambda'],
+        clip_rewards=DEFAULTS['clip_rewards'],
+        clip_grads_norm=DEFAULTS['clip_grads_norm'],
+        normalize_returns=DEFAULTS['normalize_returns'],
+        normalize_advantages=DEFAULTS['normalize_advantages'],
+    ):
+        SyncRunningAgent.__init__(self, n_envs)
+        ActorCriticAgent.__init__(self, obs_spec, act_spec, sess_mgr=sess_mgr, **kwargs)
+        self.logger = StreamLogger(n_envs=n_envs, log_freq=10, sess_mgr=self.sess_mgr)
 
-    val_per_iter = int(max_iters/10)
-    ob_spec = env.obs_spec()
-    ac_spec = env.action_spec()
-    pi = policy_func("pi", ob_space, ac_space)  # Construct network for new policy
-    # placeholder
-    ob = U.get_placeholder_cached(name="ob")
-    ac = pi.pdtype.sample_placeholder([None])
-    stochastic = U.get_placeholder_cached(name="stochastic")
-    loss = tf.reduce_mean(tf.square(ac-pi.ac))
-    var_list = pi.get_trainable_variables()
-    adam = MpiAdam(var_list, epsilon=adam_epsilon)
-    lossandgrad = U.function([ob, ac, stochastic], [loss]+[U.flatgrad(loss, var_list)])
+    def traj_segment_generator(pi, env, discriminator, horizon, expert_dataset, stochastic):
+        """
+        steps thru env
+        """
+        # initialize state vars. not sure which i will end up needing
+        t = 0
+        new = True
+        rew = 0.0
+        true_rew = 0.0
+        cur_ep_ret = 0
+        cur_ep_len = 0
+        ep_rets = []
+        ep_lens = []
 
-    U.initialize()
-    adam.sync()
-    logger.log("Pretraining with Behavior Cloning...")
-    for iter_so_far in tqdm(range(int(max_iters))):
-        ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'train')
-        train_loss, g = lossandgrad(ob_expert, ac_expert, True)
-        adam.update(g, optim_stepsize)
-        if verbose and iter_so_far % val_per_iter == 0:
-            ob_expert, ac_expert = dataset.get_next_batch(-1, 'val')
-            val_loss, _ = lossandgrad(ob_expert, ac_expert, True)
-            logger.log("Training loss: {}, Validation loss: {}".format(train_loss, val_loss))
+        ob, *_ = env.reset()  # hopefulle these work
+        ac = self.get_action(obs)
 
-    if ckpt_dir is None:
-        savedir_fname = tempfile.TemporaryDirectory().name
-    else:
-        savedir_fname = osp.join(ckpt_dir, task_name)
-    U.save_state(savedir_fname, var_list=pi.get_variables())
-    return savedir_fname
+        # setup history arrays
+        obs = np.array([ob for _ in range(horizon)])
+        rews = np.zeros(horizon, 'float32')
+        pred_vals = np.zeros(horizon, 'float32')
+        dones = np.zeros(horizon, 'int32')
+        acs = np.array([ac for _ in range(horizon)])
+        prev_acs = acs.copy()
 
+        while True:  #
+            prev_ac = ac
+            ac, pred_val = self.get_action_and_value(ob)
+            # Slight weirdness here because we need value function at time T
+            # before returning segment [0, T-1] so we get the correct
+            # terminal value --> dont totally get below
+            if t > 0 and t % horizon == 0:  # if terminal step
+                yield {"ob" : obs, "rew" : rews, "pred_vals" : pred_val, "done" : dones,
+                    "ac" : acs, "prev_ac" : prev_acs, "next_pred_val": pred_val * (1 - new),
+                    "ep_rets" : ep_rets, "ep_lens" : ep_lens}
+                _, pred_val = self.get_action_and_value(ob)
+                ep_rets = []
+                ep_lens = []
 
-def get_task_name(args):
-    task_name = 'BC'
-    task_name += '.{}'.format(args.env_id.split("-")[0])
-    task_name += '.traj_limitation_{}'.format(args.traj_limitation)
-    task_name += ".seed_{}".format(args.seed)
-    return task_name
+            i = t % horizon  # start filling in history arryas
+            obs[i] = ob
+            pred_vals[i] = pred_val
+            dones[i] = done
+            acs[i] = ac
+            prev_acs[i] = prev_ac
 
+            obs, rew, done = env.step(ac)
+            rews[i] = rew
 
-def main(args):
-    U.make_session(num_cpu=1).__enter__()
-    set_global_seeds(args.seed)
-    env = gym.make(args.env_id)
-
-    def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
-                                    reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=2)
-    env = bench.Monitor(env, logger.get_dir() and
-                        osp.join(logger.get_dir(), "monitor.json"))
-    env.seed(args.seed)
-    gym.logger.setLevel(logging.WARN)
-    task_name = get_task_name(args)
-    args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
-    args.log_dir = osp.join(args.log_dir, task_name)
-    dataset = SCDataset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
-    savedir_fname = learn(env,
-                          policy_fn,
-                          dataset,
-                          max_iters=args.BC_max_iter,
-                          ckpt_dir=args.checkpoint_dir,
-                          log_dir=args.log_dir,
-                          task_name=task_name,
-                          verbose=True)
-    avg_len, avg_ret = runner(env,
-                              policy_fn,
-                              savedir_fname,
-                              timesteps_per_batch=1024,
-                              number_trajs=10,
-                              stochastic_policy=args.stochastic_policy,
-                              save=args.save_sample,
-                              reuse=True)
+            cur_ep_ret += rew
+            cur_ep_len += 1
+            if done:
+                ep_rets.append(cur_ep_ret)
+                ep_lens.append(cur_ep_len)
+                cur_ep_ret = 0
+                cur_ep_len = 0
+                ob = env.reset()
+            t += 1
 
 
-if __name__ == '__main__':
-    args = argsparser()
-    main(args)
+
+
+
+
