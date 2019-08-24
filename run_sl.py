@@ -2,16 +2,29 @@ import os
 import gin
 import tensorflow as tf
 from absl import app, flags
+import logging
 
 import my_reaver as rvr
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler("./temp_log", mode='w')
+file_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+
+# dir_name = os.path.dirname(os.path.abspath(__file__))
+# logger.info("DIRNAME: ", dir_name)
+
 flags.DEFINE_string('env', "Simple64", 'Either Gym env id or PySC2 map name to run agent in.')
-flags.DEFINE_string('agent', 'sl', 'Name of the agent. Must be one of (a2c, ppo, sl).')
+flags.DEFINE_string('agent', 'a2c', 'Name of the agent. Must be one of (a2c, ppo, sl).')
 
 flags.DEFINE_bool('render', False, 'Whether to render first(!) env.')
 flags.DEFINE_string('gpu', '0', 'GPU(s) id(s) to use. If not set TensorFlow will use CPU.')
 
-flags.DEFINE_integer('n_envs', 4, 'Number of environments to execute in parallel.')
+flags.DEFINE_integer('n_envs', 2, 'Number of environments to execute in parallel.')
 flags.DEFINE_integer('n_updates', 1000000, 'Number of train updates (1 update has batch_sz * traj_len samples).')
 
 flags.DEFINE_integer('ckpt_freq', 500, 'Number of train updates per one checkpoint save.')
@@ -60,6 +73,7 @@ def main(argv):
     expt = rvr.utils.Experiment(args.results_dir, args.env, args.agent, args.experiment, args.restore)
 
     gin_files = rvr.utils.find_configs(args.env, os.path.dirname(os.path.abspath(__file__)))
+    logger.info(gin_files)
     if args.restore:
         gin_files += [expt.config_path]
     gin_files += args.gin_files
@@ -68,8 +82,8 @@ def main(argv):
         args.gin_bindings.append("build_cnn_nature.data_format = 'channels_last'")  # seems to be here, how does this work?
         args.gin_bindings.append("build_fully_conv.data_format = 'channels_last'")
 
-    gin.parse_config_files_and_bindings(gin_files, args.gin_bindings)
-    args.n_envs = min(args.n_envs, gin.query_parameter('ACAgent.batch_sz'))  # makes no difference
+    gin.parse_config_files_and_bindings(gin_files, args.gin_bindings)  # this is where error is sourced from
+    args.n_envs = min(args.n_envs, gin.query_parameter('my_reaver.agents.base.base_ac.ACAgent.batch_sz'))  # makes no difference
 
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
