@@ -1,3 +1,50 @@
+
+
+---------------------------------
+
+import bs4 as bs
+import os
+import requests
+
+headers = {
+    'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML like Gecko) Chrome/72.0.3626.81 Safari/537.36'
+    }
+
+
+class FilingScraper:
+    def __init__(self, ticker):
+        self.ticker = ticker
+        self.file_htms = []
+
+
+    def get_urls(self):
+        url = f"http://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={self.ticker}&type=&dateb=&owner=&start=1&count=100&output=xml"
+        sec_page = requests.get(url, headers=headers, timeout=5).text  # make sure headers is correct on comp
+        sec_soup = bs.BeautifulSoup(sec_page)
+
+        for f in sec_soup.find_all("filing"):
+            if f.find("type").get_text() == "10-Q" or f.find("type").get_text() == "10-K":
+                hrefs.append(f.find("filinghref").get_text())
+
+        for url in hrefs:
+            archive_page = requests.get(url, headers=headers, timeout=5).text
+            archive_soup = bs.BeautifulSoup(archive_page)
+
+            table = archive_soup.find("table", {"class": "tableFile"})
+            for tr in table.tbody.find_all("tr")[1:]:
+                if tr.find_all("td")[2] == "10-Q" or tr.find_all("td")[2] == "10-K":  # clean this and above
+                        # feel like i need something else here. smthn to do with the href i think. pretty sure its in the docs
+                        self.file_htms.append("https://www.sec.gov" + tr.find("a"))
+            # once this block is all set its just parsing the actual files. more of the same
+
+    def parse(self):
+        for f in file_htms:
+            return _parse(f)
+
+    def _parse(self, url):
+
+-------------------------
+
 import os
 import multiprocessing
 import tensorflow as tf
@@ -78,7 +125,7 @@ def main(argv):
 if __name__ == '__main__':
     app.run(main)
     
-    
+------------------------------ 
 import os
 import shutil
 
