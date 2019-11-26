@@ -1,18 +1,27 @@
-import sys
-import gin
-import numpy as np
-import pickle
-import os
-import logging
+import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
-from absl import flags
-from tqdm import tqdm
-from pysc2.lib import actions, features, protocol, point
-from pysc2.env.environment import StepType
-from . import Env, Spec, Space
-from reaver.utils.logger import base_logger
-from absl import app, args
-from pysc2.env.environment import TimeStep, StepType
-from pysc2 import run_configs
-from s2clientprotocol import sc2api_pb2 as sc_pb
-from s2clientprotocol import common_pb2 as sc_common
+headers = {
+    'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML like Gecko) Chrome/72.0.3626.81 Safari/537.36'
+    }
+
+
+def use_driver(url):
+    """ starts up a ChromeDriver, gets dom, and closes """
+    options = webdriver.ChromeOptions()
+    options.add_argument('headless')
+    driver = webdriver.Chrome("/usr/bin/chromedriver", options=options)
+    driver.get(url)
+    dom = driver.page_source
+    driver.close()
+
+    return dom
+  
+  
+player_id = 201935  #harden
+season = "2016-17"
+url = "https://stats.nba.com/stats/shotchartdetail?AheadBehind=&ClutchTime=&ContextFilter=&ContextMeasure=FGA&DateFrom=&DateTo=&EndPeriod=&EndRange=&GameID=&GameSegment=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&Outcome=&Period=0&PlayerID=201935&PlayerPosition=&PointDiff=&Position=&RangeType=&RookieYear=&Season=2018-19&SeasonSegment=&SeasonType=Regular+Season&StartPeriod=&StartRange=&TeamID=0&VsConference=&VsDivision="
+print(url)  # working fine on click
+# resp = requests.get(url, headers=headers, timeout=20)
+test = use_driver(url)
